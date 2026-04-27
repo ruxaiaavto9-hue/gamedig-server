@@ -3,40 +3,54 @@ const cors = require("cors");
 const Gamedig = require("gamedig");
 
 const app = express();
+
 app.use(cors({ origin: "*" }));
 
 const PORT = process.env.PORT || 10000;
 
+// 🟢 health check
+app.get("/", (req, res) => {
+  res.send("CS 1.6 API LIVE 🚀");
+});
+
+// 🔥 servers list
 const servers = [
   { name: "CS Server 1", host: "80.241.246.26", port: 27777 },
   { name: "CS Server 2", host: "80.241.246.27", port: 27015 }
 ];
 
-app.get("/", (req, res) => {
-  res.send("CS API LIVE 🚀");
-});
-
+// 🔥 MAIN API
 app.get("/servers", async (req, res) => {
   try {
     const results = await Promise.all(
       servers.map(async (s) => {
+        let state = null;
+
+        // 🔥 TRY CS16 FIRST
         try {
-          const state = await Gamedig.query({
+          state = await Gamedig.query({
             type: "cs16",
             host: s.host,
             port: s.port,
-            socketTimeout: 3000
+            socketTimeout: 5000,
+            attemptTimeout: 5000
           });
+        } catch (e1) {
+          // 🔁 FALLBACK TO VALVE
+          try {
+            state = await Gamedig.query({
+              type: "valve",
+              host: s.host,
+              port: s.port,
+              socketTimeout: 5000,
+              attemptTimeout: 5000
+            });
+          } catch (e2) {
+            state = null;
+          }
+        }
 
-          return {
-            name: s.name,
-            ip: `${s.host}:${s.port}`,
-            online: true,
-            players: state.players.length,
-            maxPlayers: state.maxplayers,
-            map: state.map
-          };
-        } catch (err) {
+        if (!state) {
           return {
             name: s.name,
             ip: `${s.host}:${s.port}`,
@@ -46,15 +60,25 @@ app.get("/servers", async (req, res) => {
             map: "offline"
           };
         }
+
+        return {
+          name: s.name,
+          ip: `${s.host}:${s.port}`,
+          online: true,
+          players: state.players ? state.players.length : 0,
+          maxPlayers: state.maxplayers || 0,
+          map: state.map || "unknown"
+        };
       })
     );
 
     res.json(results);
-  } catch (e) {
-    res.status(500).json({ error: "API failed" });
+  } catch (err) {
+    res.status(500).json({ error: "Server crashed" });
   }
 });
 
+// 🚀 start server
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
