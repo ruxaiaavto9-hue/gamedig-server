@@ -9,18 +9,26 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-// 🟢 HEALTH CHECK
+// 🟢 HEALTH
 app.get("/", (req, res) => {
   res.send("CS 1.6 API LIVE 🚀");
 });
 
-// 🔥 DYNAMIC SERVER LIST (can be updated from dashboard)
+// 🔥 ALL YOUR SERVERS
 let servers = [
-  { host: "80.241.246.26", port: 27777 },
-  { host: "80.241.246.27", port: 27015 }
+  { host: "80.241.246.26", port: 222 },
+  { host: "80.241.246.26", port: 226 },
+  { host: "80.241.246.26", port: 27999 },
+  { host: "80.241.246.26", port: 26 },
+  { host: "80.241.246.26", port: 27016 },
+  { host: "80.241.246.26", port: 336 },
+  { host: "80.241.246.26", port: 27446 },
+  { host: "80.241.246.26", port: 27017 },
+  { host: "80.241.246.26", port: 126 },
+  { host: "80.241.246.26", port: 346 }
 ];
 
-// ➕ ADD SERVER FROM DASHBOARD
+// ➕ ADD SERVER (dashboard support)
 app.post("/add-server", (req, res) => {
   const { host, port } = req.body;
 
@@ -28,26 +36,18 @@ app.post("/add-server", (req, res) => {
     return res.status(400).json({ error: "host & port required" });
   }
 
-  servers.push({
-    host: host.trim(),
-    port: Number(port)
-  });
+  servers.push({ host, port: Number(port) });
 
-  res.json({
-    ok: true,
-    message: "Server added successfully",
-    servers
-  });
+  res.json({ ok: true, servers });
 });
 
-// 🔥 MAIN LIVE API
+// 🔥 LIVE SERVERS API
 app.get("/servers", async (req, res) => {
   try {
     const results = await Promise.all(
       servers.map(async (s) => {
         let state = null;
 
-        // 🔥 TRY CS16 FIRST
         try {
           state = await Gamedig.query({
             type: "cs16",
@@ -57,7 +57,6 @@ app.get("/servers", async (req, res) => {
             attemptTimeout: 7000
           });
         } catch (e1) {
-          // 🔁 FALLBACK
           try {
             state = await Gamedig.query({
               type: "valve",
@@ -83,7 +82,7 @@ app.get("/servers", async (req, res) => {
           };
         }
 
-        // 🟢 ONLINE SAFE DATA
+        // 🟢 ONLINE
         return {
           name:
             state.name?.trim() ||
@@ -106,7 +105,7 @@ app.get("/servers", async (req, res) => {
   }
 });
 
-// 🚀 START SERVER
+// 🚀 START
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
