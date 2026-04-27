@@ -8,15 +8,15 @@ app.use(cors({ origin: "*" }));
 
 const PORT = process.env.PORT || 10000;
 
-// 🟢 health check
+// 🟢 Health check
 app.get("/", (req, res) => {
   res.send("CS 1.6 API LIVE 🚀");
 });
 
-// 🔥 servers list
+// 🔥 Servers list
 const servers = [
-  { name: "CS Server 1", host: "80.241.246.26", port: 27777 },
-  { name: "CS Server 2", host: "80.241.246.27", port: 27015 }
+  { host: "80.241.246.26", port: 27777 },
+  { host: "80.241.246.27", port: 27015 }
 ];
 
 // 🔥 MAIN API
@@ -26,7 +26,7 @@ app.get("/servers", async (req, res) => {
       servers.map(async (s) => {
         let state = null;
 
-        // 🔥 TRY CS16 FIRST
+        // 🔥 TRY CS16
         try {
           state = await Gamedig.query({
             type: "cs16",
@@ -36,7 +36,7 @@ app.get("/servers", async (req, res) => {
             attemptTimeout: 5000
           });
         } catch (e1) {
-          // 🔁 FALLBACK TO VALVE
+          // 🔁 FALLBACK VALVE
           try {
             state = await Gamedig.query({
               type: "valve",
@@ -50,9 +50,10 @@ app.get("/servers", async (req, res) => {
           }
         }
 
+        // ❌ OFFLINE
         if (!state) {
           return {
-            name: s.name,
+            name: `Server ${s.port}`,
             ip: `${s.host}:${s.port}`,
             online: false,
             players: 0,
@@ -61,8 +62,9 @@ app.get("/servers", async (req, res) => {
           };
         }
 
+        // 🟢 ONLINE (REAL DATA)
         return {
-          name: s.name,
+          name: state.name?.trim() || state.hostname?.trim() || `Server ${s.port}`,
           ip: `${s.host}:${s.port}`,
           online: true,
           players: state.players ? state.players.length : 0,
@@ -78,7 +80,7 @@ app.get("/servers", async (req, res) => {
   }
 });
 
-// 🚀 start server
+// 🚀 Start server
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
