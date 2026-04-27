@@ -1,14 +1,22 @@
 const express = require("express");
+const cors = require("cors");
+
 const app = express();
+
+// 🔥 CORS FIX (CRITICAL)
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"]
+}));
 
 const PORT = process.env.PORT || 10000;
 
-// test route
+// 🟢 Root route (health check)
 app.get("/", (req, res) => {
-  res.send("Server is running 🚀");
+  res.send("CS 1.6 API is running 🚀");
 });
 
-// 🔥 MAIN API FOR LOVABLE
+// 🔥 MAIN API ENDPOINT
 app.get("/servers", (req, res) => {
   res.json([
     {
@@ -30,6 +38,7 @@ app.get("/servers", (req, res) => {
   ]);
 });
 
+// 🚀 START SERVER
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
