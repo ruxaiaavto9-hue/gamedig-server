@@ -1,44 +1,40 @@
-const express = require("express");
-const cors = require("cors");
+const Gamedig = require("gamedig");
 
-const app = express();
+app.get("/servers", async (req, res) => {
+  const servers = [
+    { name: "CS Server 1", host: "80.241.246.26", port: 27777 },
+    { name: "CS Server 2", host: "80.241.246.27", port: 27015 }
+  ];
 
-// 🔥 CORS FIX (CRITICAL)
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST"]
-}));
+  const data = await Promise.all(
+    servers.map(async (s) => {
+      try {
+        const state = await Gamedig.query({
+          type: "cs16",
+          host: s.host,
+          port: s.port
+        });
 
-const PORT = process.env.PORT || 10000;
+        return {
+          name: s.name,
+          ip: `${s.host}:${s.port}`,
+          online: true,
+          players: state.players.length,   // 🔥 REAL
+          maxPlayers: state.maxplayers,
+          map: state.map
+        };
+      } catch (e) {
+        return {
+          name: s.name,
+          ip: `${s.host}:${s.port}`,
+          online: false,
+          players: 0,
+          maxPlayers: 0,
+          map: "unknown"
+        };
+      }
+    })
+  );
 
-// 🟢 Root route (health check)
-app.get("/", (req, res) => {
-  res.send("CS 1.6 API is running 🚀");
-});
-
-// 🔥 MAIN API ENDPOINT
-app.get("/servers", (req, res) => {
-  res.json([
-    {
-      name: "CS Server 1",
-      ip: "80.241.246.26:27777",
-      online: true,
-      players: 12,
-      maxPlayers: 32,
-      map: "de_dust2"
-    },
-    {
-      name: "CS Server 2",
-      ip: "80.241.246.27:27015",
-      online: true,
-      players: 8,
-      maxPlayers: 24,
-      map: "de_inferno"
-    }
-  ]);
-});
-
-// 🚀 START SERVER
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  res.json(data);
 });
