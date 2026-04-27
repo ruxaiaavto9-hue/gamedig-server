@@ -9,87 +9,69 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-// 🟢 health
+// 🟢 HEALTH CHECK
 app.get("/", (req, res) => {
   res.send("CS 1.6 API LIVE 🚀");
 });
 
-// 🔥 SERVERS
-const servers = [
+// 🔥 DYNAMIC SERVER LIST (can be updated from dashboard)
+let servers = [
   { host: "80.241.246.26", port: 27777 },
   { host: "80.241.246.27", port: 27015 }
 ];
 
-// 🧠 KILL DATABASE (RAM TEMP)
-let killLog = [];
+// ➕ ADD SERVER FROM DASHBOARD
+app.post("/add-server", (req, res) => {
+  const { host, port } = req.body;
 
-// 🔥 LOG KILL (CALL FROM SERVER PLUGIN LATER)
-app.post("/log-kill", (req, res) => {
-  const { player } = req.body;
-
-  if (!player) {
-    return res.status(400).json({ error: "player required" });
+  if (!host || !port) {
+    return res.status(400).json({ error: "host & port required" });
   }
 
-  killLog.push({
-    player,
-    time: Date.now()
+  servers.push({
+    host: host.trim(),
+    port: Number(port)
   });
 
-  res.json({ ok: true });
-});
-
-// 🔥 TOP KILLS LAST 12 HOURS
-app.get("/top-kills", (req, res) => {
-  const now = Date.now();
-
-  const last12h = killLog.filter(
-    k => now - k.time < 12 * 60 * 60 * 1000
-  );
-
-  const stats = {};
-
-  last12h.forEach(k => {
-    stats[k.player] = (stats[k.player] || 0) + 1;
+  res.json({
+    ok: true,
+    message: "Server added successfully",
+    servers
   });
-
-  const top = Object.entries(stats)
-    .map(([player, kills]) => ({ player, kills }))
-    .sort((a, b) => b.kills - a.kills)
-    .slice(0, 5);
-
-  res.json(top);
 });
 
-// 🔥 SERVERS API
+// 🔥 MAIN LIVE API
 app.get("/servers", async (req, res) => {
   try {
     const results = await Promise.all(
       servers.map(async (s) => {
         let state = null;
 
+        // 🔥 TRY CS16 FIRST
         try {
           state = await Gamedig.query({
             type: "cs16",
             host: s.host,
             port: s.port,
-            socketTimeout: 8000,
-            attemptTimeout: 8000
+            socketTimeout: 7000,
+            attemptTimeout: 7000
           });
         } catch (e1) {
+          // 🔁 FALLBACK
           try {
             state = await Gamedig.query({
               type: "valve",
               host: s.host,
               port: s.port,
-              socketTimeout: 8000,
-              attemptTimeout: 8000
+              socketTimeout: 7000,
+              attemptTimeout: 7000
             });
           } catch (e2) {
             state = null;
           }
         }
 
+        // ❌ OFFLINE
         if (!state) {
           return {
             name: `Server ${s.port}`,
@@ -101,6 +83,7 @@ app.get("/servers", async (req, res) => {
           };
         }
 
+        // 🟢 ONLINE SAFE DATA
         return {
           name:
             state.name?.trim() ||
@@ -123,7 +106,7 @@ app.get("/servers", async (req, res) => {
   }
 });
 
-// 🚀 start
+// 🚀 START SERVER
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
