@@ -14,7 +14,7 @@ app.get("/", (req, res) => {
   res.send("CS 1.6 API LIVE 🚀");
 });
 
-// 🔥 ALL YOUR SERVERS
+// 🔥 SERVERS
 let servers = [
   { host: "80.241.246.26", port: 222 },
   { host: "80.241.246.26", port: 226 },
@@ -28,7 +28,7 @@ let servers = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// ➕ ADD SERVER (dashboard support)
+// ➕ ADD SERVER
 app.post("/add-server", (req, res) => {
   const { host, port } = req.body;
 
@@ -36,73 +36,122 @@ app.post("/add-server", (req, res) => {
     return res.status(400).json({ error: "host & port required" });
   }
 
-  servers.push({ host, port: Number(port) });
-
-  res.json({ ok: true, servers });
+  servers.push({ host: host.trim(), port: Number(port) });
+  res.json({ ok: true });
 });
 
-// 🔥 LIVE SERVERS API
+// 🧠 HISTORY FOR AVERAGE
+let history = {};
+
+// 🔥 FETCH LIVE DATA
+async function fetchServers() {
+  return Promise.all(
+    servers.map(async (s) => {
+      let state = null;
+
+      try {
+        state = await Gamedig.query({
+          type: "cs16",
+          host: s.host,
+          port: s.port,
+          socketTimeout: 6000,
+          attemptTimeout: 6000
+        });
+      } catch {
+        state = null;
+      }
+
+      const key = `${s.host}:${s.port}`;
+
+      const players =
+        state && Array.isArray(state.players)
+          ? state.players.length
+          : 0;
+
+      if (!history[key]) history[key] = [];
+      history[key].push(players);
+
+      if (history[key].length > 30) {
+        history[key].shift();
+      }
+
+      return {
+        name: state?.name || `Server ${s.port}`,
+        ip: key,
+        online: !!state,
+        players,
+        maxPlayers: state?.maxplayers || 0,
+        map: state?.map || "offline"
+      };
+    })
+  );
+}
+
+// 📊 AVERAGE
+function avg(arr) {
+  if (!arr || arr.length === 0) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+// 🏆 SCORING SYSTEM
+function rankServers(data) {
+  return data
+    .map(s => {
+      const average = avg(history[s.ip]);
+      const peak = Math.max(...(history[s.ip] || [0]));
+
+      const score =
+        average * 0.5 +
+        peak * 0.3 +
+        s.players * 0.2;
+
+      return {
+        ...s,
+        average: Number(average.toFixed(2)),
+        peak,
+        score
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
+// 🧠 SNAPSHOT SYSTEM (30 MIN)
+let snapshotTop = [];
+let lastSnapshotTime = 0;
+
+async function updateSnapshot() {
+  const data = await fetchServers();
+  const ranked = rankServers(data).slice(0, 5);
+
+  snapshotTop = ranked.map((s, i) => ({
+    rank: i + 1,
+    ...s,
+    crown:
+      i === 0 ? "gold" :
+      i === 1 ? "silver" :
+      i === 2 ? "bronze" :
+      null
+  }));
+
+  lastSnapshotTime = Date.now();
+}
+
+// ⏱ every 30 minutes
+setInterval(updateSnapshot, 30 * 60 * 1000);
+updateSnapshot();
+
+// 🔥 LIVE API
 app.get("/servers", async (req, res) => {
-  try {
-    const results = await Promise.all(
-      servers.map(async (s) => {
-        let state = null;
+  const data = await fetchServers();
+  res.json(data);
+});
 
-        try {
-          state = await Gamedig.query({
-            type: "cs16",
-            host: s.host,
-            port: s.port,
-            socketTimeout: 7000,
-            attemptTimeout: 7000
-          });
-        } catch (e1) {
-          try {
-            state = await Gamedig.query({
-              type: "valve",
-              host: s.host,
-              port: s.port,
-              socketTimeout: 7000,
-              attemptTimeout: 7000
-            });
-          } catch (e2) {
-            state = null;
-          }
-        }
-
-        // ❌ OFFLINE
-        if (!state) {
-          return {
-            name: `Server ${s.port}`,
-            ip: `${s.host}:${s.port}`,
-            online: false,
-            players: 0,
-            maxPlayers: 0,
-            map: "offline"
-          };
-        }
-
-        // 🟢 ONLINE
-        return {
-          name:
-            state.name?.trim() ||
-            state.hostname?.trim() ||
-            `Server ${s.port}`,
-          ip: `${s.host}:${s.port}`,
-          online: true,
-          players: Array.isArray(state.players)
-            ? state.players.length
-            : 0,
-          maxPlayers: state.maxplayers || 0,
-          map: state.map || "unknown"
-        };
-      })
-    );
-
-    res.json(results);
-  } catch (err) {
-    res.status(500).json({ error: "Server crashed" });
-  }
+// 🏆 TOP 5 SNAPSHOT API
+app.get("/top-servers", (req, res) => {
+  res.json({
+    updated: lastSnapshotTime,
+    servers: snapshotTop
+  });
 });
 
 // 🚀 START
