@@ -1,68 +1,103 @@
-const express = require("express");
-const cors = require("cors");
-const Gamedig = require("gamedig");
+Ξ
+ΞSᘿᐺᕲᗩΞ's workspace
+My project
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+Production
 
-const PORT = process.env.PORT || 10000;
+gamedig-server
 
-app.get("/", (req, res) => {
-  res.send("CS API LIVE");
-});
 
-// SERVERS
-const servers = [
-  { host: "80.241.246.26", port: 222 },
-  { host: "80.241.246.26", port: 226 },
-  { host: "80.241.246.26", port: 27999 },
-  { host: "80.241.246.26", port: 27016 },
-  { host: "80.241.246.26", port: 27017 }
-];
+Search
+CTRL+
+K
 
-// SAFE QUERY (NO HANG)
-async function querySafe(host, port) {
-  try {
-    const result = await Promise.race([
-      Gamedig.query({
-        type: "cs16",
-        host,
-        port,
-        socketTimeout: 5000,
-        attemptTimeout: 5000
-      }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("timeout")), 6000)
-      )
-    ]);
+New
 
-    return result;
-  } catch {
-    return null;
-  }
-}
+Upgrade
 
-// MAIN ROUTE (SAFE LOOP)
-app.get("/servers", async (req, res) => {
-  const results = [];
 
-  for (const s of servers) {
-    const state = await querySafe(s.host, s.port);
+R
+Environment
+gamedig-server
+Events
+Settings
+MONITOR
+Logs
+Metrics
+MANAGE
+Environment
+Shell
+Scaling
+Previews
+Disk
+One-Off Jobs
 
-    results.push({
-      ip: `${s.host}:${s.port}`,
-      name: state?.name || `Server ${s.port}`,
-      online: !!state,
-      players: state?.players?.length || 0,
-      maxPlayers: state?.maxplayers || 0,
-      map: state?.map || "offline"
-    });
-  }
+Changelog
+Invite a friend
 
-  res.json(results);
-});
+Contact support
+Render Status
+WEB SERVICE
+gamedig-server
+Node
+Free
+Upgrade your instance
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("RUNNING ON", PORT);
-});
+Connect
+
+Manual Deploy
+Service ID:
+srv-d7nkur77f7vs73fr6go0
+
+ruxaiaavto9-hue / gamedig-server
+main
+https://gamedig-server-69up.onrender.com
+
+Your free instance will spin down with inactivity, which can delay requests by 50 seconds or more.
+Upgrade now
+April 29, 2026 at 2:34 AM
+Live
+8a4392d
+Update server.js
+
+All logs
+Search
+Search
+
+Apr 29, 2:33 AM - 2:35 AM
+GMT+4
+
+
+
+==> Downloading cache...
+==> Cloning from https://github.com/ruxaiaavto9-hue/gamedig-server
+==> Checking out commit 8a4392df660da49028af6ba5508597459c2ce77b in branch main
+==> Downloaded 62MB in 1s. Extraction took 2s.
+==> Using Node.js version 24.14.1 (default)
+==> Docs on specifying a Node.js version: https://render.com/docs/node-version
+==> Running build command 'npm install'...
+up to date, audited 148 packages in 599ms
+39 packages are looking for funding
+  run `npm fund` for details
+found 0 vulnerabilities
+==> Uploading build...
+==> Uploaded in 1.6s. Compression took 0.9s
+==> Build successful 🎉
+==> Deploying...
+==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
+==> Running 'node server.js'
+Server running on port 10000
+==> Your service is live 🎉
+==> 
+==> ///////////////////////////////////////////////////////////
+==> 
+==> Available at your primary URL https://gamedig-server-69up.onrender.com
+Menu
+==> 
+==> ///////////////////////////////////////////////////////////
+Need better ways to work with logs? Try theRender CLI, Render MCP Server, or set up a log stream integration 
+
+0 services selected:
+
+Move
+
