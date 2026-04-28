@@ -31,17 +31,15 @@ let servers = [
 // ➕ ADD SERVER
 app.post("/add-server", (req, res) => {
   const { host, port } = req.body;
+  if (!host || !port) return res.status(400).json({ error: "host & port required" });
 
-  if (!host || !port) {
-    return res.status(400).json({ error: "host & port required" });
-  }
-
-  servers.push({ host: host.trim(), port: Number(port) });
+  servers.push({ host, port: Number(port) });
   res.json({ ok: true });
 });
 
-// 🧠 HISTORY FOR AVERAGE
-let history = {};
+// 🧠 HISTORY STORAGE (for average)
+let history = {}; 
+// { "ip:port": [players, players, players...] }
 
 // 🔥 FETCH LIVE DATA
 async function fetchServers() {
@@ -54,24 +52,24 @@ async function fetchServers() {
           type: "cs16",
           host: s.host,
           port: s.port,
-          socketTimeout: 6000,
-          attemptTimeout: 6000
+          socketTimeout: 5000,
+          attemptTimeout: 5000
         });
       } catch {
         state = null;
       }
 
       const key = `${s.host}:${s.port}`;
+      const players = state && state.players
+        ? state.players.length
+        : 0;
 
-      const players =
-        state && Array.isArray(state.players)
-          ? state.players.length
-          : 0;
-
+      // store history
       if (!history[key]) history[key] = [];
       history[key].push(players);
 
-      if (history[key].length > 30) {
+      // keep last 20 snapshots
+      if (history[key].length > 20) {
         history[key].shift();
       }
 
@@ -87,71 +85,34 @@ async function fetchServers() {
   );
 }
 
-// 📊 AVERAGE
-function avg(arr) {
+// 📊 AVERAGE CALC
+function getAverage(arr) {
   if (!arr || arr.length === 0) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
-// 🏆 SCORING SYSTEM
-function rankServers(data) {
-  return data
+// 🏆 RANK BY AVERAGE
+function rankByAverage(list) {
+  return list
     .map(s => {
-      const average = avg(history[s.ip]);
-      const peak = Math.max(...(history[s.ip] || [0]));
-
-      const score =
-        average * 0.5 +
-        peak * 0.3 +
-        s.players * 0.2;
-
-      return {
-        ...s,
-        average: Number(average.toFixed(2)),
-        peak,
-        score
-      };
+      const avg = getAverage(history[s.ip]);
+      return { ...s, avg };
     })
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.avg - a.avg);
 }
 
-// 🧠 SNAPSHOT SYSTEM (30 MIN)
-let snapshotTop = [];
-let lastSnapshotTime = 0;
-
-async function updateSnapshot() {
-  const data = await fetchServers();
-  const ranked = rankServers(data).slice(0, 5);
-
-  snapshotTop = ranked.map((s, i) => ({
-    rank: i + 1,
-    ...s,
-    crown:
-      i === 0 ? "gold" :
-      i === 1 ? "silver" :
-      i === 2 ? "bronze" :
-      null
-  }));
-
-  lastSnapshotTime = Date.now();
-}
-
-// ⏱ every 30 minutes
-setInterval(updateSnapshot, 30 * 60 * 1000);
-updateSnapshot();
-
-// 🔥 LIVE API
+// 🔥 LIVE API (instant data)
 app.get("/servers", async (req, res) => {
   const data = await fetchServers();
   res.json(data);
 });
 
-// 🏆 TOP 5 SNAPSHOT API
-app.get("/top-servers", (req, res) => {
-  res.json({
-    updated: lastSnapshotTime,
-    servers: snapshotTop
-  });
+// 🔥 TOP BY AVERAGE (REAL ACTIVITY)
+app.get("/top-servers", async (req, res) => {
+  const data = await fetchServers();
+  const ranked = rankByAverage(data).slice(0, 5);
+
+  res.json(ranked);
 });
 
 // 🚀 START
