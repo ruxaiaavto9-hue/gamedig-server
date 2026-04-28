@@ -40,34 +40,39 @@ app.post("/add-server", (req, res) => {
   res.json({ ok: true });
 });
 
-// 🧠 HISTORY FOR AVERAGE
+// 🧠 HISTORY
 let history = {};
+
+// 🔥 RETRY FUNCTION (IMPORTANT FIX)
+async function queryServer(host, port, tries = 2) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await Gamedig.query({
+        type: "cs16",
+        host,
+        port,
+        socketTimeout: 8000,
+        attemptTimeout: 8000
+      });
+    } catch (err) {
+      if (i === tries - 1) return null;
+    }
+  }
+}
 
 // 🔥 FETCH LIVE DATA
 async function fetchServers() {
   return Promise.all(
     servers.map(async (s) => {
-      let state = null;
 
-      try {
-        state = await Gamedig.query({
-          type: "cs16",
-          host: s.host,
-          port: s.port,
-          socketTimeout: 6000,
-          attemptTimeout: 6000
-        });
-      } catch {
-        state = null;
-      }
+      const state = await queryServer(s.host, s.port);
 
       const key = `${s.host}:${s.port}`;
 
       const players =
-        state && Array.isArray(state.players)
-          ? state.players.length
-          : 0;
+        state?.players?.length || 0;
 
+      // history safe push
       if (!history[key]) history[key] = [];
       history[key].push(players);
 
@@ -77,8 +82,9 @@ async function fetchServers() {
 
       return {
         name: state?.name || `Server ${s.port}`,
+        serverName: state?.name || null,
         ip: key,
-        online: !!state,
+        online: state ? true : false,
         players,
         maxPlayers: state?.maxplayers || 0,
         map: state?.map || "offline"
@@ -87,35 +93,40 @@ async function fetchServers() {
   );
 }
 
-// 📊 AVERAGE
+// 📊 AVERAGE SAFE
 function avg(arr) {
   if (!arr || arr.length === 0) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
-// 🏆 SCORING SYSTEM
+// 🏆 RANK SYSTEM (FIXED for offline stability)
 function rankServers(data) {
   return data
     .map(s => {
-      const average = avg(history[s.ip]);
-      const peak = Math.max(...(history[s.ip] || [0]));
+      const hist = history[s.ip] || [];
+
+      const average = avg(hist);
+      const peak = hist.length ? Math.max(...hist) : 0;
+
+      // ❗ offline servers don't destroy ranking anymore
+      const liveBoost = s.online ? 1 : 0.3;
 
       const score =
-        average * 0.5 +
+        (average * 0.5 +
         peak * 0.3 +
-        s.players * 0.2;
+        s.players * 0.2) * liveBoost;
 
       return {
         ...s,
         average: Number(average.toFixed(2)),
         peak,
-        score
+        score: Number(score.toFixed(2))
       };
     })
     .sort((a, b) => b.score - a.score);
 }
 
-// 🧠 SNAPSHOT SYSTEM (30 MIN)
+// 🧠 SNAPSHOT
 let snapshotTop = [];
 let lastSnapshotTime = 0;
 
@@ -136,7 +147,7 @@ async function updateSnapshot() {
   lastSnapshotTime = Date.now();
 }
 
-// ⏱ every 30 minutes
+// ⏱ UPDATE LOOP
 setInterval(updateSnapshot, 30 * 60 * 1000);
 updateSnapshot();
 
@@ -146,7 +157,7 @@ app.get("/servers", async (req, res) => {
   res.json(data);
 });
 
-// 🏆 TOP 5 SNAPSHOT API
+// 🏆 TOP API
 app.get("/top-servers", (req, res) => {
   res.json({
     updated: lastSnapshotTime,
