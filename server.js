@@ -4,7 +4,7 @@ const Gamedig = require("gamedig");
 
 const app = express();
 
-app.use(cors());
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
@@ -15,155 +15,146 @@ app.get("/", (req, res) => {
 });
 
 // 🔥 SERVERS
-const servers = [
+let servers = [
   { host: "80.241.246.26", port: 222 },
   { host: "80.241.246.26", port: 226 },
   { host: "80.241.246.26", port: 27999 },
+  { host: "80.241.246.26", port: 26 },
   { host: "80.241.246.26", port: 27016 },
-  { host: "80.241.246.26", port: 27017 }
+  { host: "80.241.246.26", port: 336 },
+  { host: "80.241.246.26", port: 27446 },
+  { host: "80.241.246.26", port: 27017 },
+  { host: "80.241.246.26", port: 126 },
+  { host: "80.241.246.26", port: 346 }
 ];
 
-// 🧠 history safe store
-const history = {};
+// ➕ ADD SERVER
+app.post("/add-server", (req, res) => {
+  const { host, port } = req.body;
 
-// 🔥 SAFE QUERY (NO CRASH, NO HANG)
-async function queryServer(host, port) {
-  const types = ["cs16", "protocol-valve"];
-
-  for (const type of types) {
-    try {
-      return await Gamedig.query({
-        type,
-        host,
-        port,
-        socketTimeout: 8000,
-        attemptTimeout: 8000
-      });
-    } catch (e) {
-      // try next type
-    }
+  if (!host || !port) {
+    return res.status(400).json({ error: "host & port required" });
   }
 
-  return null;
-}
+  servers.push({ host: host.trim(), port: Number(port) });
+  res.json({ ok: true });
+});
 
-// 🔥 FETCH DATA SAFE MODE
+// 🧠 HISTORY FOR AVERAGE
+let history = {};
+
+// 🔥 FETCH LIVE DATA
 async function fetchServers() {
-  const results = [];
+  return Promise.all(
+    servers.map(async (s) => {
+      let state = null;
 
-  for (const s of servers) {
-    const key = `${s.host}:${s.port}`;
+      try {
+        state = await Gamedig.query({
+          type: "cs16",
+          host: s.host,
+          port: s.port,
+          socketTimeout: 6000,
+          attemptTimeout: 6000
+        });
+      } catch {
+        state = null;
+      }
 
-    let state = null;
+      const key = `${s.host}:${s.port}`;
 
-    try {
-      state = await queryServer(s.host, s.port);
-    } catch (e) {
-      state = null;
-    }
+      const players =
+        state && Array.isArray(state.players)
+          ? state.players.length
+          : 0;
 
-    const players = state?.players?.length ?? null;
-
-    // ❗ IMPORTANT: DO NOT store fake 0 on failure
-    if (!history[key]) history[key] = [];
-
-    if (players !== null) {
+      if (!history[key]) history[key] = [];
       history[key].push(players);
-      if (history[key].length > 30) history[key].shift();
-    }
 
-    results.push({
-      ip: key,
-      name: state?.name || `Server ${s.port}`,
-      serverName: state?.name || null,
-      online: !!state,
-      players: players ?? 0,
-      maxPlayers: state?.maxplayers || 0,
-      map: state?.map || "offline"
-    });
-  }
+      if (history[key].length > 30) {
+        history[key].shift();
+      }
 
-  return results;
+      return {
+        name: state?.name || `Server ${s.port}`,
+        ip: key,
+        online: !!state,
+        players,
+        maxPlayers: state?.maxplayers || 0,
+        map: state?.map || "offline"
+      };
+    })
+  );
 }
 
-// 📊 average helper
+// 📊 AVERAGE
 function avg(arr) {
   if (!arr || arr.length === 0) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
-// 🏆 ranking (safe, no fake drops)
+// 🏆 SCORING SYSTEM
 function rankServers(data) {
   return data
     .map(s => {
-      const hist = history[s.ip] || [];
-
-      const average = avg(hist);
-      const peak = hist.length ? Math.max(...hist) : 0;
-
-      // ⚡ stable boost (not too punishing offline)
-      const boost = s.online ? 1 : 0.8;
+      const average = avg(history[s.ip]);
+      const peak = Math.max(...(history[s.ip] || [0]));
 
       const score =
-        (average * 0.5 +
+        average * 0.5 +
         peak * 0.3 +
-        s.players * 0.2) * boost;
+        s.players * 0.2;
 
       return {
         ...s,
         average: Number(average.toFixed(2)),
         peak,
-        score: Number(score.toFixed(2))
+        score
       };
     })
     .sort((a, b) => b.score - a.score);
 }
 
-// 🧠 TOP CACHE
+// 🧠 SNAPSHOT SYSTEM (30 MIN)
 let snapshotTop = [];
-let lastUpdate = 0;
+let lastSnapshotTime = 0;
 
-// update snapshot safely
 async function updateSnapshot() {
-  try {
-    const data = await fetchServers();
-    const ranked = rankServers(data).slice(0, 5);
+  const data = await fetchServers();
+  const ranked = rankServers(data).slice(0, 5);
 
-    snapshotTop = ranked.map((s, i) => ({
-      rank: i + 1,
-      ...s,
-      crown: i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : null
-    }));
+  snapshotTop = ranked.map((s, i) => ({
+    rank: i + 1,
+    ...s,
+    crown:
+      i === 0 ? "gold" :
+      i === 1 ? "silver" :
+      i === 2 ? "bronze" :
+      null
+  }));
 
-    lastUpdate = Date.now();
-  } catch (e) {
-    console.log("snapshot error:", e.message);
-  }
+  lastSnapshotTime = Date.now();
 }
 
-// refresh every 30 min
+// ⏱ every 30 minutes
 setInterval(updateSnapshot, 30 * 60 * 1000);
 updateSnapshot();
 
 // 🔥 LIVE API
 app.get("/servers", async (req, res) => {
-  try {
-    const data = await fetchServers();
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: "server error" });
-  }
+  const data = await fetchServers();
+  res.json(data);
 });
 
-// 🏆 TOP API
+// 🏆 TOP 5 SNAPSHOT API
 app.get("/top-servers", (req, res) => {
   res.json({
-    updated: lastUpdate,
+    updated: lastSnapshotTime,
     servers: snapshotTop
   });
 });
 
 // 🚀 START
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
