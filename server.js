@@ -7,9 +7,10 @@ const app = express();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
+// ✅ IMPORTANT: Render PORT FIX
 const PORT = process.env.PORT || 10000;
 
-// 🟢 HEALTH
+// 🟢 HEALTH CHECK
 app.get("/", (req, res) => {
   res.send("CS 1.6 API LIVE 🚀");
 });
@@ -31,7 +32,7 @@ let servers = [
 // 🧠 HISTORY (ranking stability)
 let history = {};
 
-// 🔥 SAFE QUERY (multi fallback)
+// 🔥 SAFE QUERY (prevents crash)
 async function queryServer(host, port) {
   const types = ["cs16", "protocol-valve"];
 
@@ -41,61 +42,71 @@ async function queryServer(host, port) {
         type,
         host,
         port,
-        socketTimeout: 10000,
-        attemptTimeout: 10000
+        socketTimeout: 12000,
+        attemptTimeout: 12000
       });
 
       return res;
     } catch (e) {
-      // try next type
+      // ignore and try next type
     }
   }
 
   return null;
 }
 
-// 🔥 FETCH LIVE DATA
+// 🔥 FETCH SERVERS (CRASH SAFE)
 async function fetchServers() {
-  return Promise.all(
-    servers.map(async (s) => {
+  const results = [];
 
+  for (const s of servers) {
+    try {
       const state = await queryServer(s.host, s.port);
+
       const key = `${s.host}:${s.port}`;
 
-      const players = state?.players?.length;
+      const players = state?.players?.length ?? 0;
 
-      // ❗ IMPORTANT: only store real values (no fake 0)
+      // history SAFE push (no fake data)
       if (!history[key]) history[key] = [];
-
-      if (players !== undefined && players !== null) {
+      if (state) {
         history[key].push(players);
+        if (history[key].length > 30) history[key].shift();
       }
 
-      // keep history small
-      if (history[key].length > 30) {
-        history[key].shift();
-      }
-
-      return {
+      results.push({
         name: state?.name || `Server ${s.port}`,
         serverName: state?.name || null,
         ip: key,
-        online: state ? true : false,
-        players: players ?? 0,
+        online: !!state,
+        players,
         maxPlayers: state?.maxplayers || 0,
         map: state?.map || "offline"
-      };
-    })
-  );
+      });
+
+    } catch (err) {
+      results.push({
+        name: `Server ${s.port}`,
+        serverName: null,
+        ip: `${s.host}:${s.port}`,
+        online: false,
+        players: 0,
+        maxPlayers: 0,
+        map: "offline"
+      });
+    }
+  }
+
+  return results;
 }
 
-// 📊 AVG
+// 📊 AVERAGE
 function avg(arr) {
   if (!arr || arr.length === 0) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
-// 🏆 RANK SYSTEM (STABLE, NO FAKE DROPS)
+// 🏆 RANK SYSTEM (SAFE)
 function rankServers(data) {
   return data
     .map(s => {
@@ -104,7 +115,6 @@ function rankServers(data) {
       const average = avg(hist);
       const peak = hist.length ? Math.max(...hist) : 0;
 
-      // ⚡ prevent offline destroying ranking
       const liveBoost = s.online ? 1 : 0.6;
 
       const score =
@@ -143,14 +153,18 @@ async function updateSnapshot() {
   lastSnapshotTime = Date.now();
 }
 
-// ⏱ refresh
+// ⏱ refresh every 30 min
 setInterval(updateSnapshot, 30 * 60 * 1000);
 updateSnapshot();
 
 // 🔥 LIVE API
 app.get("/servers", async (req, res) => {
-  const data = await fetchServers();
-  res.json(data);
+  try {
+    const data = await fetchServers();
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: "API crash safe fallback" });
+  }
 });
 
 // 🏆 TOP API
@@ -161,7 +175,7 @@ app.get("/top-servers", (req, res) => {
   });
 });
 
-// 🚀 START
-app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
+// 🚀 START (IMPORTANT FOR RENDER)
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("Server running on port", PORT);
 });
