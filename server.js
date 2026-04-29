@@ -7,13 +7,14 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-// ⏱️ 6 HOURS RACE WINDOW
-const RACE_TIME = 6 * 60 * 60 * 1000;
+// ⏱️ RACE SETTINGS
+const RACE_TIME = 6 * 60 * 60 * 1000; // 6 hours
+const REFRESH_INTERVAL = 20000; // 20 sec live update
 
-// 💾 storage
+// 💾 STORAGE
 let snapshotStart = {};
 let leaderboard = [];
-let lastUpdate = Date.now();
+let cache = { data: [], time: 0 };
 
 // 📌 SERVERS
 const serversList = [
@@ -29,45 +30,64 @@ const serversList = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// 🔥 query
-async function queryServer(host, port) {
+// 🔥 SAFE QUERY (NO CRASH EVER)
+async function queryServer(host, port, retries = 1) {
   try {
-    return await Gamedig.query({
-      type: "cs16",
-      host,
-      port
-    });
-  } catch {
-    return null;
+    return await Promise.race([
+      Gamedig.query({
+        type: "cs16",
+        host,
+        port
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("timeout")), 5000)
+      )
+    ]);
+  } catch (err) {
+    if (retries > 0) {
+      return await queryServer(host, port, retries - 1);
+    }
+
+    // ❗ NEVER FAIL → return safe object
+    return {
+      name: null,
+      players: [],
+      maxplayers: 0,
+      map: "offline"
+    };
   }
 }
 
-// 📊 fetch all servers
-async function fetchData() {
-  return Promise.all(
+// 📊 FETCH SERVERS (SAFE MODE)
+async function fetchServers() {
+  const results = await Promise.all(
     serversList.map(async (s) => {
       const data = await queryServer(s.host, s.port);
 
-      const players = data ? data.players.length : 0;
+      const players = data?.players?.length || 0;
 
       return {
         ip: `${s.host}:${s.port}`,
         name: data?.name || `${s.host}:${s.port}`,
         players,
-        online: !!data
+        maxPlayers: data?.maxplayers || 0,
+        map: data?.map || "offline",
+        online: players > 0 || data?.name !== null
       };
     })
   );
+
+  return results;
 }
 
-// 🧠 INIT SNAPSHOT (start of race)
+// 🧠 INIT SNAPSHOT (6H START BASELINE)
 async function initSnapshot(data) {
   data.forEach(s => {
-    snapshotStart[s.ip] = s.players;
+    snapshotStart[s.ip] = s.players || 0;
   });
 }
 
-// 🔥 CALCULATE LIVE CHANGE
+// 📈 LIVE CHANGE CALCULATION
 function calculateLive(data) {
   return data.map(server => {
     const start = snapshotStart[server.ip] || 0;
@@ -84,7 +104,7 @@ function calculateLive(data) {
   });
 }
 
-// 🏆 RANK by gain (NOT current players)
+// 🏆 RANK SYSTEM
 function rank(data) {
   return [...data]
     .sort((a, b) => b.change - a.change)
@@ -94,46 +114,51 @@ function rank(data) {
     }));
 }
 
-// 🔄 refresh system
+// 🔄 MAIN REFRESH LOOP
 async function refresh() {
-  const data = await fetchData();
+  const servers = await fetchServers();
 
-  const live = calculateLive(data);
-  const ranked = rank(live);
+  const live = calculateLive(servers);
+  leaderboard = rank(live);
 
-  leaderboard = ranked;
-  lastUpdate = Date.now();
+  cache = {
+    data: leaderboard,
+    time: Date.now()
+  };
 
-  console.log("🔄 Race updated");
+  console.log("🔄 Updated safely");
 }
 
-// 🚀 FIRST LOAD
+// 🚀 INITIAL START
 (async () => {
-  const data = await fetchData();
+  const data = await fetchServers();
   await initSnapshot(data);
+
   leaderboard = calculateLive(data);
+  cache.data = leaderboard;
 })();
 
-// 🔁 LIVE refresh every 20 sec
-setInterval(refresh, 20000);
+// ⚡ LIVE UPDATE (NO CRASH)
+setInterval(refresh, REFRESH_INTERVAL);
 
-// 🏁 RESET RACE every 6 hours
+// 🏁 RESET RACE EVERY 6 HOURS
 setInterval(async () => {
-  const data = await fetchData();
+  const data = await fetchServers();
   await initSnapshot(data);
+
   console.log("🏁 NEW 6H RACE STARTED");
 }, RACE_TIME);
 
 // 📡 API
 app.get("/servers", (req, res) => {
-  res.json(leaderboard);
+  res.json(cache.data);
 });
 
-// ❤️ health
+// ❤️ HEALTH CHECK
 app.get("/", (req, res) => {
-  res.send("CS 6H RACE SYSTEM 🚀");
+  res.send("CS 6H RACE SYSTEM (BULLETPROOF) 🚀");
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
