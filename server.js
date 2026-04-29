@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 const UPDATE_INTERVAL = 20000;
 const TIMEOUT = 8000;
 
-// 📌 SERVERS (REAL NAMES FROM GAME SERVER)
+// 📌 SERVERS
 const serversList = [
   { host: "80.241.246.26", port: 222 },
   { host: "80.241.246.26", port: 226 },
@@ -25,11 +25,16 @@ const serversList = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// 💾 PERSISTED LEADERBOARD
+// 💾 CACHE
 let rankedServers = [];
-let lastUpdate = null;
+let loadingState = {
+  total: serversList.length,
+  checked: 0,
+  remaining: serversList.length,
+  loading: true
+};
 
-// 🔥 QUERY SERVER
+// 🔥 QUERY
 async function queryServer(host, port) {
   try {
     return await Promise.race([
@@ -43,69 +48,72 @@ async function queryServer(host, port) {
   }
 }
 
-// 📊 UPDATE RANKS (ONLY HERE CALCULATED)
-async function updateRanks() {
-  console.log("🔄 Updating leaderboard...");
-
-  const results = await Promise.all(
-    serversList.map(async (s) => {
-      const data = await queryServer(s.host, s.port);
-
-      return {
-        ip: `${s.host}:${s.port}`,
-        name: data?.name || "Unknown Server",
-        players: data?.players?.length || 0,
-        maxPlayers: data?.maxplayers || 32,
-        map: data?.map || "unknown",
-        online: !!data
-      };
-    })
-  );
-
-  // 🏆 SORT + ASSIGN RANK
-  rankedServers = results
-    .sort((a, b) => {
-      if (b.players !== a.players) return b.players - a.players;
-      return a.ip.localeCompare(b.ip);
-    })
-    .map((s, i) => ({
-      ...s,
-      rank: i + 1
-    }));
-
-  lastUpdate = Date.now();
-
-  console.log("✅ Leaderboard updated");
+// 🎯 CUSTOM RANK LOGIC (NO #1 #2 SYSTEM)
+function calculateScore(players) {
+  // 1000 base - players influence
+  return Math.max(0, 1000 - players * 10);
 }
 
-// 🚀 INITIAL LOAD
+// 📊 UPDATE SYSTEM
+async function updateRanks() {
+  loadingState.checked = 0;
+  loadingState.remaining = serversList.length;
+  loadingState.loading = true;
+
+  const results = [];
+
+  for (let s of serversList) {
+    const data = await queryServer(s.host, s.port);
+
+    const players = data?.players?.length || 0;
+
+    results.push({
+      ip: `${s.host}:${s.port}`,
+      name: data?.name || "Unknown Server",
+      players,
+      maxPlayers: data?.maxplayers || 32,
+      map: data?.map || "unknown",
+      online: !!data,
+      score: calculateScore(players)
+    });
+
+    loadingState.checked++;
+    loadingState.remaining--;
+  }
+
+  // 📉 sort by SCORE (LOWER players = lower score logic)
+  rankedServers = results.sort((a, b) => a.score - b.score);
+
+  loadingState.loading = false;
+}
+
+// 🚀 INIT
 (async () => {
   await updateRanks();
 })();
 
-// 🔄 AUTO UPDATE LOOP
 setInterval(updateRanks, UPDATE_INTERVAL);
 
-// 📡 API (NO RECALC HERE)
+// 📡 API
 app.get("/servers", (req, res) => {
-  res.set({
-    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-    "Pragma": "no-cache",
-    "Expires": "0"
-  });
+  res.set("Cache-Control", "no-store");
 
   res.json({
-    lastUpdate,
+    loading: loadingState.loading,
+    progress: {
+      total: loadingState.total,
+      checked: loadingState.checked,
+      remaining: loadingState.remaining
+    },
     servers: rankedServers
   });
 });
 
-// 🧪 HEALTH CHECK
+// 🧪 HEALTH
 app.get("/", (req, res) => {
-  res.send("STABLE CS 1.6 RANK SYSTEM 🚀");
+  res.send("HYBRID SCORE SYSTEM 🚀");
 });
 
-// 🚀 START SERVER
 app.listen(PORT, () => {
-  console.log(`Server running on ${PORT}`);
+  console.log(`Running on ${PORT}`);
 });
