@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 
 // ⏱ SETTINGS
 const LIVE_REFRESH = 20000;
-const DELTA_WINDOW = 4 * 60 * 1000;
+const DELTA_WINDOW = 6 * 60 * 60 * 1000; // 6 hours
 const TIMEOUT = 7000;
 
 // 📌 SERVERS
@@ -26,11 +26,12 @@ const serversList = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// 💾 STATE (only raw data)
+// 💾 STATE
 let state = {};
 let history = {};
+let isReady = false;
 
-// 🔥 QUERY FUNCTION
+// 🔥 QUERY SERVER
 async function queryServer(host, port) {
   try {
     return await Promise.race([
@@ -44,7 +45,7 @@ async function queryServer(host, port) {
   }
 }
 
-// 📊 UPDATE ALL SERVERS STATE
+// 📊 UPDATE STATE
 async function updateState() {
   await Promise.all(
     serversList.map(async (s) => {
@@ -73,7 +74,7 @@ async function updateState() {
         };
       }
 
-      // HISTORY (optional analytics)
+      // HISTORY (for delta)
       if (!history[key]) history[key] = [];
 
       history[key].push({
@@ -88,28 +89,53 @@ async function updateState() {
   );
 }
 
-// 🏆 STABLE RANK CALCULATION (IMPORTANT)
+// 🔥 INIT SYSTEM (FIX FOR 0 ONLINE ISSUE)
+async function init() {
+  console.log("⏳ Loading servers...");
+
+  await updateState();
+
+  isReady = true;
+  console.log("🚀 Server data ready!");
+}
+
+// 🔄 LOOP
+setInterval(updateState, LIVE_REFRESH);
+init();
+
+// 🏆 STABLE RANK FUNCTION
 function getRankedServers() {
   return Object.values(state)
     .sort((a, b) => {
-      // primary sort: players
+      // primary sort
       if (b.players !== a.players) return b.players - a.players;
 
-      // secondary sort: IP (fixes random browser differences)
+      // secondary stable sort (IMPORTANT FIX)
       return a.ip.localeCompare(b.ip);
     })
-    .map((s, i) => ({
-      ...s,
-      rank: i + 1
-    }));
-}
+    .map((s, i) => {
+      const hist = history[s.ip] || [];
+      const oldest = hist[0];
 
-// 🔄 AUTO UPDATE LOOP
-setInterval(updateState, LIVE_REFRESH);
-updateState(); // initial load
+      const delta = oldest ? s.players - oldest.players : 0;
+
+      return {
+        ...s,
+        rank: i + 1,
+        delta
+      };
+    });
+}
 
 // 📡 API
 app.get("/servers", (req, res) => {
+  if (!isReady) {
+    return res.json({
+      loading: true,
+      servers: []
+    });
+  }
+
   const ranked = getRankedServers();
 
   res.set({
@@ -121,12 +147,12 @@ app.get("/servers", (req, res) => {
   res.json(ranked);
 });
 
-// 🧪 HEALTH CHECK
+// 🧪 HEALTH
 app.get("/", (req, res) => {
-  res.send("CS SERVER API RUNNING 🚀");
+  res.send("CS SERVER SYSTEM STABLE 🚀");
 });
 
-// 🚀 START SERVER
+// 🚀 START
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
