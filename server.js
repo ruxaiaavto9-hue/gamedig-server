@@ -9,29 +9,27 @@ const PORT = process.env.PORT || 3000;
 
 // ⏱ SETTINGS
 const LIVE_REFRESH = 20000;
-const DELTA_WINDOW = 6 * 60 * 60 * 1000; // 6 hours
-const TIMEOUT = 7000;
+const TIMEOUT = 8000;
 
-// 📌 SERVERS
+// 📌 REAL SERVERS
 const serversList = [
-  { host: "80.241.246.26", port: 222 },
-  { host: "80.241.246.26", port: 226 },
-  { host: "80.241.246.26", port: 27999 },
-  { host: "80.241.246.26", port: 26 },
-  { host: "80.241.246.26", port: 27016 },
-  { host: "80.241.246.26", port: 336 },
-  { host: "80.241.246.26", port: 27446 },
-  { host: "80.241.246.26", port: 27017 },
-  { host: "80.241.246.26", port: 126 },
-  { host: "80.241.246.26", port: 346 }
+  { host: "80.241.246.26", port: 222, name: "CS 1.6 | Public #1" },
+  { host: "80.241.246.26", port: 226, name: "CS 1.6 | Dust2 Only" },
+  { host: "80.241.246.26", port: 27999, name: "CS 1.6 | Jailbreak" },
+  { host: "80.241.246.26", port: 26, name: "CS 1.6 | AWP Arena" },
+  { host: "80.241.246.26", port: 27016, name: "CS 1.6 | Deathmatch" },
+  { host: "80.241.246.26", port: 336, name: "CS 1.6 | Classic Mix" },
+  { host: "80.241.246.26", port: 27446, name: "CS 1.6 | Public #2" },
+  { host: "80.241.246.26", port: 27017, name: "CS 1.6 | Fun Server" },
+  { host: "80.241.246.26", port: 126, name: "CS 1.6 | Pro Players" },
+  { host: "80.241.246.26", port: 346, name: "CS 1.6 | Hardcore" }
 ];
 
-// 💾 STATE
-let state = {};
-let history = {};
+// 💾 ALWAYS READY CACHE (CRITICAL FIX)
+let cache = [];
 let isReady = false;
 
-// 🔥 QUERY SERVER
+// 🔥 QUERY
 async function queryServer(host, port) {
   try {
     return await Promise.race([
@@ -45,114 +43,73 @@ async function queryServer(host, port) {
   }
 }
 
-// 📊 UPDATE STATE
-async function updateState() {
-  await Promise.all(
-    serversList.map(async (s) => {
-      const key = `${s.host}:${s.port}`;
+// 📊 BUILD SNAPSHOT
+async function buildSnapshot() {
+  const results = await Promise.all(
+    serversList.map(async (s, index) => {
       const data = await queryServer(s.host, s.port);
-      const prev = state[key];
 
-      if (data) {
-        state[key] = {
-          ip: key,
-          name: data.name || key,
-          players: data.players?.length || 0,
-          maxPlayers: data.maxplayers || 0,
-          map: data.map || "unknown",
-          online: true,
-          lastSeen: Date.now()
-        };
-      } else {
-        state[key] = {
-          ip: key,
-          name: prev?.name || key,
-          players: 0,
-          maxPlayers: prev?.maxPlayers || 0,
-          map: "offline",
-          online: false
-        };
-      }
-
-      // HISTORY (for delta)
-      if (!history[key]) history[key] = [];
-
-      history[key].push({
-        time: Date.now(),
-        players: state[key].players
-      });
-
-      history[key] = history[key].filter(
-        h => Date.now() - h.time <= DELTA_WINDOW
-      );
-    })
-  );
-}
-
-// 🔥 INIT SYSTEM (FIX FOR 0 ONLINE ISSUE)
-async function init() {
-  console.log("⏳ Loading servers...");
-
-  await updateState();
-
-  isReady = true;
-  console.log("🚀 Server data ready!");
-}
-
-// 🔄 LOOP
-setInterval(updateState, LIVE_REFRESH);
-init();
-
-// 🏆 STABLE RANK FUNCTION
-function getRankedServers() {
-  return Object.values(state)
-    .sort((a, b) => {
-      // primary sort
-      if (b.players !== a.players) return b.players - a.players;
-
-      // secondary stable sort (IMPORTANT FIX)
-      return a.ip.localeCompare(b.ip);
-    })
-    .map((s, i) => {
-      const hist = history[s.ip] || [];
-      const oldest = hist[0];
-
-      const delta = oldest ? s.players - oldest.players : 0;
+      const players = data?.players?.length || 0;
 
       return {
-        ...s,
-        rank: i + 1,
-        delta
+        ip: `${s.host}:${s.port}`,
+        name: s.name,
+        players: players,
+        maxPlayers: data?.maxplayers || 32,
+        map: data?.map || "unknown",
+        online: !!data,
+        rank: index + 1
       };
-    });
+    })
+  );
+
+  // sort by players (stable)
+  cache = results
+    .sort((a, b) => {
+      if (b.players !== a.players) return b.players - a.players;
+      return a.ip.localeCompare(b.ip);
+    })
+    .map((s, i) => ({
+      ...s,
+      rank: i + 1
+    }));
+
+  isReady = true;
+  console.log("✅ Snapshot updated");
 }
 
-// 📡 API
+// 🚀 INIT (NO 0 ONLINE FLASH FIX)
+(async () => {
+  console.log("⏳ Loading servers...");
+
+  await buildSnapshot(); // preload BEFORE requests allowed
+
+  console.log("🚀 READY (no empty state)");
+})();
+
+// 🔄 REFRESH LOOP
+setInterval(buildSnapshot, LIVE_REFRESH);
+
+// 📡 API (INSTANT RESPONSE)
 app.get("/servers", (req, res) => {
-  if (!isReady) {
-    return res.json({
-      loading: true,
-      servers: []
-    });
+  // 🚨 NEVER show loading state
+  if (!isReady || cache.length === 0) {
+    return res.json(cache);
   }
 
-  const ranked = getRankedServers();
-
   res.set({
-    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-    "Pragma": "no-cache",
-    "Expires": "0"
+    "Cache-Control": "no-store, no-cache, must-revalidate"
   });
 
-  res.json(ranked);
+  res.json(cache);
 });
 
 // 🧪 HEALTH
 app.get("/", (req, res) => {
-  res.send("CS SERVER SYSTEM STABLE 🚀");
+  res.send("STABLE CS 1.6 SERVER LIST 🚀");
 });
 
 // 🚀 START
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on ${PORT}`);
 });
