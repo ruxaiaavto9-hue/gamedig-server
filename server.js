@@ -37,61 +37,89 @@ app.post("/add-server", (req, res) => {
   res.json({ ok: true });
 });
 
-// 🧠 HISTORY STORAGE (for average)
-let history = {}; 
-// { "ip:port": [players, players, players...] }
+// 🧠 HISTORY STORAGE
+let history = {};
+let cache = null;
+let lastFetch = 0;
 
-// 🔥 FETCH LIVE DATA
-async function fetchServers() {
-  return Promise.all(
-    servers.map(async (s) => {
-      let state = null;
+// 🔁 QUERY WITH RETRY
+async function queryServer(s) {
+  try {
+    const state = await Gamedig.query({
+      type: "cs16",
+      host: s.host,
+      port: s.port,
+      socketTimeout: 5000,
+      attemptTimeout: 5000
+    });
 
-      try {
-        state = await Gamedig.query({
-          type: "cs16",
-          host: s.host,
-          port: s.port,
-          socketTimeout: 5000,
-          attemptTimeout: 5000
-        });
-      } catch {
-        state = null;
-      }
+    return state;
+  } catch {
+    try {
+      // 🔁 retry stronger
+      const state = await Gamedig.query({
+        type: "cs16",
+        host: s.host,
+        port: s.port,
+        socketTimeout: 7000
+      });
 
-      const key = `${s.host}:${s.port}`;
-      const players = state && state.players
-        ? state.players.length
-        : 0;
-
-      // store history
-      if (!history[key]) history[key] = [];
-      history[key].push(players);
-
-      // keep last 20 snapshots
-      if (history[key].length > 20) {
-        history[key].shift();
-      }
-
-      return {
-        name: state?.name || `Server ${s.port}`,
-        ip: key,
-        online: !!state,
-        players,
-        maxPlayers: state?.maxplayers || 0,
-        map: state?.map || "offline"
-      };
-    })
-  );
+      return state;
+    } catch {
+      return null;
+    }
+  }
 }
 
-// 📊 AVERAGE CALC
+// 🔥 FETCH LIVE DATA (SEQUENTIAL + CACHE)
+async function fetchServers() {
+  // ⚡ cache 10 წამი
+  if (Date.now() - lastFetch < 10000 && cache) {
+    return cache;
+  }
+
+  const results = [];
+
+  for (const s of servers) {
+    const state = await queryServer(s);
+
+    const key = `${s.host}:${s.port}`;
+
+    const players = state
+      ? (state.players?.length || state.raw?.numplayers || 0)
+      : 0;
+
+    // history
+    if (!history[key]) history[key] = [];
+    history[key].push(players);
+
+    if (history[key].length > 20) {
+      history[key].shift();
+    }
+
+    results.push({
+      name: state?.name || `Server ${s.port}`,
+      ip: key,
+      online: !!state,
+      players,
+      maxPlayers: state?.maxplayers || 0,
+      map: state?.map || "offline"
+    });
+  }
+
+  cache = results;
+  lastFetch = Date.now();
+
+  return results;
+}
+
+// 📊 AVERAGE
 function getAverage(arr) {
   if (!arr || arr.length === 0) return 0;
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
+  return Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
 }
 
-// 🏆 RANK BY AVERAGE
+// 🏆 RANK
 function rankByAverage(list) {
   return list
     .map(s => {
@@ -101,17 +129,15 @@ function rankByAverage(list) {
     .sort((a, b) => b.avg - a.avg);
 }
 
-// 🔥 LIVE API (instant data)
+// 🔥 API
 app.get("/servers", async (req, res) => {
   const data = await fetchServers();
   res.json(data);
 });
 
-// 🔥 TOP BY AVERAGE (REAL ACTIVITY)
 app.get("/top-servers", async (req, res) => {
   const data = await fetchServers();
   const ranked = rankByAverage(data).slice(0, 5);
-
   res.json(ranked);
 });
 
