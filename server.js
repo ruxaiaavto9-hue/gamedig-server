@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 
 // ⏱️ SETTINGS
 const REFRESH_INTERVAL = 20000; // 20 sec
-const TIMEOUT = 4500; // max wait per server
+const TIMEOUT = 4500; // per server timeout
 const RACE_TIME = 6 * 60 * 60 * 1000; // 6 hours
 
 // 📌 SERVERS
@@ -26,11 +26,11 @@ const serversList = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// 💾 STATE STORAGE (IMPORTANT)
+// 💾 STATE (never lose data)
 let state = {};
 let leaderboard = [];
 
-// 🧠 INIT STATE (NEVER EMPTY AGAIN)
+// 🧠 INIT STATE
 function initState() {
   serversList.forEach(s => {
     const key = `${s.host}:${s.port}`;
@@ -50,8 +50,8 @@ function initState() {
   });
 }
 
-// 🔥 SAFE QUERY (NEVER FAILS)
-async function queryServer(host, port) {
+// 🔥 SAFE QUERY (never crashes system)
+async function queryServer(host, port, retries = 1) {
   try {
     return await Promise.race([
       Gamedig.query({
@@ -64,11 +64,14 @@ async function queryServer(host, port) {
       )
     ]);
   } catch (err) {
+    if (retries > 0) {
+      return await queryServer(host, port, retries - 1);
+    }
     return null;
   }
 }
 
-// 📊 UPDATE ALL SERVERS (SMART MODE)
+// 📊 UPDATE SERVERS
 async function updateServers() {
   const results = await Promise.all(
     serversList.map(async (s) => {
@@ -89,7 +92,7 @@ async function updateServers() {
           lastSeen: Date.now()
         };
       } else {
-        // ❗ IMPORTANT: DO NOT REMOVE OLD DATA
+        // ❗ KEEP OLD DATA (never lose server)
         state[key] = {
           ip: key,
           name: prev?.name || key,
@@ -109,7 +112,7 @@ async function updateServers() {
   leaderboard = results;
 }
 
-// 🏆 SIMPLE RANK (by players)
+// 🏆 RANK (by players)
 function rank() {
   return [...leaderboard]
     .sort((a, b) => b.players - a.players)
@@ -122,12 +125,12 @@ function rank() {
 // 🚀 INIT
 initState();
 
-// 🔄 LIVE LOOP (SAFE)
+// 🔄 LIVE REFRESH
 setInterval(updateServers, REFRESH_INTERVAL);
 
-// 🏁 6H RESET (keeps system fresh)
+// 🏁 6H CYCLE RESET (keeps system fresh)
 setInterval(() => {
-  console.log("🏁 6H cycle reset (state preserved)");
+  console.log("🏁 6H cycle completed");
 }, RACE_TIME);
 
 // 📡 API
@@ -135,11 +138,11 @@ app.get("/servers", (req, res) => {
   res.json(rank());
 });
 
-// ❤️ health
+// ❤️ health check
 app.get("/", (req, res) => {
-  res.send("STABLE CS SERVER SYSTEM 🚀");
+  res.send("CS SERVER SYSTEM STABLE + RACE MODE 🚀");
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
