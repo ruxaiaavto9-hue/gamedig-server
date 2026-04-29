@@ -8,9 +8,9 @@ app.use(cors());
 const PORT = process.env.PORT || 3000;
 
 // ⏱️ SETTINGS
-const REFRESH_INTERVAL = 20000; // 20 sec
-const TIMEOUT = 4500; // per server timeout
-const RACE_TIME = 6 * 60 * 60 * 1000; // 6 hours
+const LIVE_REFRESH = 20000;          // live update (20 sec)
+const HOURLY_RANK_UPDATE = 60 * 60 * 1000; // 1 hour
+const TIMEOUT = 4500;
 
 // 📌 SERVERS
 const serversList = [
@@ -26,32 +26,16 @@ const serversList = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// 💾 STATE (never lose data)
+// 💾 STATE
 let state = {};
-let leaderboard = [];
+let ranked = [];
 
-// 🧠 INIT STATE
-function initState() {
-  serversList.forEach(s => {
-    const key = `${s.host}:${s.port}`;
+// 🧠 INITIAL SNAPSHOT (for 6H Δ baseline)
+let baseline = {};
+let hourSnapshot = {};
 
-    if (!state[key]) {
-      state[key] = {
-        ip: key,
-        name: key,
-        players: 0,
-        maxPlayers: 0,
-        map: "unknown",
-        online: false,
-        status: "unknown",
-        lastSeen: null
-      };
-    }
-  });
-}
-
-// 🔥 SAFE QUERY (never crashes system)
-async function queryServer(host, port, retries = 1) {
+// 🔥 SAFE QUERY
+async function queryServer(host, port) {
   try {
     return await Promise.race([
       Gamedig.query({
@@ -63,58 +47,45 @@ async function queryServer(host, port, retries = 1) {
         setTimeout(() => reject(new Error("timeout")), TIMEOUT)
       )
     ]);
-  } catch (err) {
-    if (retries > 0) {
-      return await queryServer(host, port, retries - 1);
-    }
+  } catch {
     return null;
   }
 }
 
-// 📊 UPDATE SERVERS
-async function updateServers() {
+// 📊 FETCH SERVERS
+async function fetchServers() {
   const results = await Promise.all(
     serversList.map(async (s) => {
       const key = `${s.host}:${s.port}`;
       const data = await queryServer(s.host, s.port);
 
-      const prev = state[key];
+      const players = data?.players?.length || 0;
 
-      if (data) {
-        state[key] = {
-          ip: key,
-          name: data.name || key,
-          players: data.players.length,
-          maxPlayers: data.maxplayers,
-          map: data.map,
-          online: true,
-          status: "online",
-          lastSeen: Date.now()
-        };
-      } else {
-        // ❗ KEEP OLD DATA (never lose server)
-        state[key] = {
-          ip: key,
-          name: prev?.name || key,
-          players: prev?.players || 0,
-          maxPlayers: prev?.maxPlayers || 0,
-          map: prev?.map || "offline",
-          online: false,
-          status: "offline",
-          lastSeen: prev?.lastSeen || null
-        };
+      // 🟢 init baseline once
+      if (baseline[key] === undefined) {
+        baseline[key] = players;
       }
 
-      return state[key];
+      return {
+        ip: key,
+        name: data?.name || key,
+        players,
+        maxPlayers: data?.maxplayers || 0,
+        map: data?.map || "offline",
+        online: !!data,
+
+        // 🔥 LIVE CHANGE (6H Δ)
+        change: players - baseline[key]
+      };
     })
   );
 
-  leaderboard = results;
+  return results;
 }
 
-// 🏆 RANK (by players)
-function rank() {
-  return [...leaderboard]
+// 🏆 HOURLY RANK (ONLY ONCE PER HOUR)
+function applyRank(data) {
+  return [...data]
     .sort((a, b) => b.players - a.players)
     .map((s, i) => ({
       ...s,
@@ -122,27 +93,62 @@ function rank() {
     }));
 }
 
+// 🔄 LIVE UPDATE (NO RANK CHANGE HERE)
+async function liveUpdate() {
+  const data = await fetchServers();
+  state = data;
+
+  // ⚡ DO NOT CHANGE RANK HERE
+  // only live Δ updates
+}
+
+// 🏁 HOURLY RANK UPDATE (THIS MOVES POSITIONS)
+async function hourlyRankUpdate() {
+  const data = await fetchServers();
+
+  ranked = applyRank(data);
+
+  console.log("🏆 HOURLY RANK UPDATED");
+}
+
 // 🚀 INIT
-initState();
+(async () => {
+  const data = await fetchServers();
+  state = data;
+  ranked = applyRank(data);
 
-// 🔄 LIVE REFRESH
-setInterval(updateServers, REFRESH_INTERVAL);
+  // snapshot for 6H Δ stability
+  data.forEach(s => {
+    hourSnapshot[s.ip] = s.players;
+  });
+})();
 
-// 🏁 6H CYCLE RESET (keeps system fresh)
-setInterval(() => {
-  console.log("🏁 6H cycle completed");
-}, RACE_TIME);
+// 🔄 LIVE LOOP (Δ ONLY)
+setInterval(liveUpdate, LIVE_REFRESH);
 
-// 📡 API
+// 🏆 HOURLY RANK LOOP
+setInterval(hourlyRankUpdate, HOURLY_RANK_UPDATE);
+
+// 📡 API (UNIFIED FOR ALL DEVICES)
 app.get("/servers", (req, res) => {
-  res.json(rank());
+  // merge rank + live
+  const merged = state.map(s => {
+    const r = ranked.find(x => x.ip === s.ip);
+
+    return {
+      ...s,
+      rank: r?.rank || 0
+    };
+  });
+
+  res.json(merged);
 });
 
-// ❤️ health check
+// ❤️ health
 app.get("/", (req, res) => {
-  res.send("CS SERVER SYSTEM STABLE + RACE MODE 🚀");
+  res.send("HOURLY RANK + LIVE Δ SYSTEM 🚀");
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on ${PORT}`);
 });
