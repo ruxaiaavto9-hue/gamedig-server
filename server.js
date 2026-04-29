@@ -7,62 +7,57 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-// 💾 LAST KNOWN DATA (ძალიან მნიშვნელოვანი)
-let lastGoodData = [];
-
-// ⏱️ cache
+// 💾 cache
 let cache = {
   data: [],
   time: 0
 };
 
-const CACHE_TIME = 30 * 1000; // 30 sec (უფრო სტაბილურია)
+let rankedData = [];
 
-// 📌 შენი სერვერები
+// ⏱️ 3 HOURS refresh (rank update)
+const REFRESH_TIME = 3 * 60 * 60 * 1000;
+
+// 📌 SERVERS
 const serversList = [
-  { ip: "80.241.246.26", port: 222, name: "Server 1" },
-  // დაამატე აქ დანარჩენები
+  { host: "80.241.246.26", port: 222 },
+  { host: "80.241.246.26", port: 226 },
+  { host: "80.241.246.26", port: 27999 },
+  { host: "80.241.246.26", port: 26 },
+  { host: "80.241.246.26", port: 27016 },
+  { host: "80.241.246.26", port: 336 },
+  { host: "80.241.246.26", port: 27446 },
+  { host: "80.241.246.26", port: 27017 },
+  { host: "80.241.246.26", port: 126 },
+  { host: "80.241.246.26", port: 346 }
 ];
 
-// 🔥 safe query with timeout + retry
-async function queryServer(ip, port, retries = 2) {
+// 🔥 query function
+async function queryServer(host, port, retries = 2) {
   try {
-    return await Promise.race([
-      Gamedig.query({
-        type: "cs16",
-        host: ip,
-        port: port
-      }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("timeout")), 5000)
-      )
-    ]);
+    return await Gamedig.query({
+      type: "cs16",
+      host,
+      port
+    });
   } catch (err) {
     if (retries > 0) {
-      return await queryServer(ip, port, retries - 1);
+      return await queryServer(host, port, retries - 1);
     }
     return null;
   }
 }
 
-// 🚀 MAIN API
-app.get("/servers", async (req, res) => {
-  const now = Date.now();
-
-  // ✅ cache return
-  if (cache.data.length > 0 && now - cache.time < CACHE_TIME) {
-    return res.json(cache.data);
-  }
-
+// 🚀 FETCH ALL SERVERS
+async function fetchServers() {
   const results = await Promise.all(
-    serversList.map(async (server) => {
-      const data = await queryServer(server.ip, server.port);
+    serversList.map(async (s) => {
+      const data = await queryServer(s.host, s.port);
 
-      // 🟢 ONLINE
       if (data) {
         return {
-          ip: `${server.ip}:${server.port}`,
-          name: data.name || server.name,
+          ip: `${s.host}:${s.port}`,
+          name: data.name || `${s.host}:${s.port}`,
           online: true,
           players: data.players.length,
           maxPlayers: data.maxplayers,
@@ -70,10 +65,9 @@ app.get("/servers", async (req, res) => {
         };
       }
 
-      // 🔴 OFFLINE (მაგრამ არ ქრება!)
       return {
-        ip: `${server.ip}:${server.port}`,
-        name: server.name,
+        ip: `${s.host}:${s.port}`,
+        name: `${s.host}:${s.port}`,
         online: false,
         players: 0,
         maxPlayers: 0,
@@ -82,28 +76,49 @@ app.get("/servers", async (req, res) => {
     })
   );
 
-  // 💾 cache update
+  return results;
+}
+
+// 🏆 RANK SYSTEM (TOP by players)
+function generateRank(data) {
+  return [...data]
+    .sort((a, b) => b.players - a.players)
+    .map((server, index) => ({
+      ...server,
+      rank: index + 1
+    }));
+}
+
+// 🔄 refresh function (every 3 hours)
+async function refreshData() {
+  const servers = await fetchServers();
+
+  const ranked = generateRank(servers);
+
   cache = {
-    data: results,
+    data: ranked,
     time: Date.now()
   };
 
-  // 💡 last known good state backup
-  if (results.length > 0) {
-    lastGoodData = results;
-  }
+  rankedData = ranked;
 
-  // 🚨 თუ რამე გაფუჭდა → ძველი მონაცემი დააბრუნე
-  if (!results || results.length === 0) {
-    return res.json(lastGoodData);
-  }
+  console.log("🔄 Servers refreshed + ranked updated");
+}
 
-  res.json(results);
+// 🚀 initial load
+refreshData();
+
+// ⏱️ every 3 hours refresh
+setInterval(refreshData, REFRESH_TIME);
+
+// 📡 API
+app.get("/servers", (req, res) => {
+  return res.json(cache.data);
 });
 
-// ❤️ wake-up endpoint (Render fix)
+// ❤️ health
 app.get("/", (req, res) => {
-  res.send("CS Server API Running 🚀");
+  res.send("CS Server API + Rank System 🚀");
 });
 
 app.listen(PORT, () => {
