@@ -7,11 +7,9 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-// ⏱ SETTINGS
 const UPDATE_INTERVAL = 20000;
 const TIMEOUT = 8000;
 
-// 📌 SERVERS
 const serversList = [
   { host: "80.241.246.26", port: 222 },
   { host: "80.241.246.26", port: 226 },
@@ -25,14 +23,9 @@ const serversList = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// 💾 CACHE
+// 💾 LAST KNOWN GOOD STATE (CRITICAL FIX)
+let cache = {};
 let rankedServers = [];
-let loadingState = {
-  total: serversList.length,
-  checked: 0,
-  remaining: serversList.length,
-  loading: true
-};
 
 // 🔥 QUERY
 async function queryServer(host, port) {
@@ -48,48 +41,50 @@ async function queryServer(host, port) {
   }
 }
 
-// 🎯 CUSTOM RANK LOGIC (NO #1 #2 SYSTEM)
-function calculateScore(players) {
-  // 1000 base - players influence
-  return Math.max(0, 1000 - players * 10);
-}
-
-// 📊 UPDATE SYSTEM
+// 📊 UPDATE (NO DATA LOSS LOGIC)
 async function updateRanks() {
-  loadingState.checked = 0;
-  loadingState.remaining = serversList.length;
-  loadingState.loading = true;
+  const results = await Promise.all(
+    serversList.map(async (s) => {
+      const key = `${s.host}:${s.port}`;
+      const data = await queryServer(s.host, s.port);
 
-  const results = [];
+      // 🔥 CRITICAL FIX: KEEP OLD DATA IF NEW FAILS
+      const prev = cache[key];
 
-  for (let s of serversList) {
-    const data = await queryServer(s.host, s.port);
+      const updated = {
+        ip: key,
+        name: data?.name || prev?.name || "Unknown Server",
+        players: data?.players?.length ?? prev?.players ?? 0,
+        maxPlayers: data?.maxplayers ?? prev?.maxPlayers ?? 32,
+        map: data?.map || prev?.map || "unknown",
 
-    const players = data?.players?.length || 0;
+        // 🔥 IMPORTANT FIX:
+        online: data ? true : (prev?.online ?? false),
 
-    results.push({
-      ip: `${s.host}:${s.port}`,
-      name: data?.name || "Unknown Server",
-      players,
-      maxPlayers: data?.maxplayers || 32,
-      map: data?.map || "unknown",
-      online: !!data,
-      score: calculateScore(players)
-    });
+        lastUpdate: data ? Date.now() : (prev?.lastUpdate || Date.now())
+      };
 
-    loadingState.checked++;
-    loadingState.remaining--;
-  }
+      cache[key] = updated;
+      return updated;
+    })
+  );
 
-  // 📉 sort by SCORE (LOWER players = lower score logic)
-  rankedServers = results.sort((a, b) => a.score - b.score);
-
-  loadingState.loading = false;
+  // 🏆 stable ranking (NO DROPS)
+  rankedServers = Object.values(cache)
+    .sort((a, b) => {
+      if (b.players !== a.players) return b.players - a.players;
+      return a.ip.localeCompare(b.ip);
+    })
+    .map((s, i) => ({
+      ...s,
+      rank: i + 1
+    }));
 }
 
 // 🚀 INIT
 (async () => {
   await updateRanks();
+  console.log("🚀 Initial load done");
 })();
 
 setInterval(updateRanks, UPDATE_INTERVAL);
@@ -99,19 +94,13 @@ app.get("/servers", (req, res) => {
   res.set("Cache-Control", "no-store");
 
   res.json({
-    loading: loadingState.loading,
-    progress: {
-      total: loadingState.total,
-      checked: loadingState.checked,
-      remaining: loadingState.remaining
-    },
     servers: rankedServers
   });
 });
 
 // 🧪 HEALTH
 app.get("/", (req, res) => {
-  res.send("HYBRID SCORE SYSTEM 🚀");
+  res.send("NO DROP STABLE SERVER SYSTEM 🚀");
 });
 
 app.listen(PORT, () => {
