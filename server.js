@@ -3,114 +3,97 @@ const cors = require("cors");
 const Gamedig = require("gamedig");
 
 const app = express();
+app.use(cors());
 
-app.use(cors({ origin: "*" }));
-app.use(express.json());
+const PORT = process.env.PORT || 3000;
 
-const PORT = process.env.PORT || 10000;
+// 🔥 Cache (ძალიან მნიშვნელოვანი)
+let cache = {
+  data: [],
+  lastUpdate: 0
+};
 
-// 🟢 HEALTH
-app.get("/", (req, res) => {
-  res.send("CS 1.6 API LIVE 🚀");
-});
+// ⏱️ Cache time (60 წამი)
+const CACHE_TIME = 60 * 1000;
 
-// 🔥 SERVERS
-const servers = [
-  { host: "80.241.246.26", port: 222 },
-  { host: "80.241.246.26", port: 226 },
-  { host: "80.241.246.26", port: 27999 },
-  { host: "80.241.246.26", port: 26 },
-  { host: "80.241.246.26", port: 27016 },
-  { host: "80.241.246.26", port: 336 },
-  { host: "80.241.246.26", port: 27446 },
-  { host: "80.241.246.26", port: 27017 },
-  { host: "80.241.246.26", port: 126 },
-  { host: "80.241.246.26", port: 346 }
-];
-
-// 🧠 CACHE (anti spam + anti freeze)
-let cache = [];
-let lastFetch = 0;
-
-// ⏱ timeout wrapper
-function timeout(ms) {
-  return new Promise(res => setTimeout(() => res(null), ms));
-}
-
-// 🔁 SAFE QUERY
-async function safeQuery(server) {
+// 🧠 Retry function
+async function queryServer(ip, port, retries = 2) {
   try {
-    return await Promise.race([
-      Gamedig.query({
-        type: "cs16",
-        host: server.host,
-        port: server.port,
-        socketTimeout: 4000,
-        attemptTimeout: 4000
-      }),
-      timeout(6000)
-    ]);
-  } catch {
+    return await Gamedig.query({
+      type: "cs16",
+      host: ip,
+      port: port
+    });
+  } catch (err) {
+    if (retries > 0) {
+      return await queryServer(ip, port, retries - 1);
+    }
     return null;
   }
 }
 
-// 🔥 FETCH ALL (FAST + SAFE)
-async function fetchServers() {
-  // cache 15 sec
-  if (Date.now() - lastFetch < 15000 && cache.length) {
-    return cache;
-  }
+// 📡 შენი სერვერების სია (აქ დაამატე შენი IP-ები)
+const serversList = [
+  { ip: "80.241.246.26", port: 222, name: "Server 222" },
+  // დაამატე სხვა სერვერები აქ
+];
 
-  const results = await Promise.all(
-    servers.map(async (s) => {
-      const state = await safeQuery(s);
-
-      const key = `${s.host}:${s.port}`;
-
-      const players = state?.players?.length ??
-                       state?.raw?.numplayers ??
-                       0;
-
-      return {
-        name: state?.name || `Server ${s.port}`,
-        ip: key,
-        online: !!state,
-        players,
-        maxPlayers: state?.maxplayers || 0,
-        map: state?.map || "offline"
-      };
-    })
-  );
-
-  cache = results;
-  lastFetch = Date.now();
-
-  return results;
-}
-
-// 📊 ROUTES
+// 🚀 მთავარი endpoint
 app.get("/servers", async (req, res) => {
-  try {
-    const data = await fetchServers();
-    res.json(data);
-  } catch (e) {
-    res.json(cache || []); // fallback → NEVER empty crash
+  const now = Date.now();
+
+  // ✅ 1. თუ cache ჯერ ვალიდურია → დაბრუნება
+  if (cache.data.length > 0 && now - cache.lastUpdate < CACHE_TIME) {
+    return res.json(cache.data);
   }
+
+  let results = [];
+
+  // 🔁 ყველა სერვერზე შემოწმება
+  for (const server of serversList) {
+    const data = await queryServer(server.ip, server.port);
+
+    if (data) {
+      results.push({
+        ip: `${server.ip}:${server.port}`,
+        name: server.name,
+        online: true,
+        players: data.players.length,
+        maxPlayers: data.maxplayers,
+        map: data.map
+      });
+    } else {
+      // ❗ თუ offline არის → არ ვშლით, უბრალოდ ვანიშნებთ
+      results.push({
+        ip: `${server.ip}:${server.port}`,
+        name: server.name,
+        online: false,
+        players: 0,
+        maxPlayers: 0,
+        map: "offline"
+      });
+    }
+  }
+
+  // 💾 cache update
+  cache = {
+    data: results,
+    lastUpdate: Date.now()
+  };
+
+  // ❗ თუ API ჩავარდა → ძველი cache მაინც ინარჩუნებს
+  if (!results || results.length === 0) {
+    return res.json(cache.data);
+  }
+
+  res.json(results);
 });
 
-// 🏆 TOP
-app.get("/top-servers", async (req, res) => {
-  try {
-    const data = await fetchServers();
-    const sorted = [...data].sort((a, b) => b.players - a.players);
-    res.json(sorted.slice(0, 5));
-  } catch {
-    res.json([]);
-  }
+// ❤️ health check (Render wake-up fix)
+app.get("/", (req, res) => {
+  res.send("CS Server API is running 🚀");
 });
 
-// 🚀 START
 app.listen(PORT, () => {
-  console.log("CS API running on port", PORT);
+  console.log(`Server running on port ${PORT}`);
 });
