@@ -7,9 +7,8 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-// ⏱️ SETTINGS
+// ⏱ SETTINGS
 const LIVE_REFRESH = 20000;
-const HOURLY_RANK = 60 * 60 * 1000;
 const DELTA_WINDOW = 4 * 60 * 1000;
 const TIMEOUT = 7000;
 
@@ -27,12 +26,11 @@ const serversList = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// 💾 STATE
+// 💾 STATE (only raw data)
 let state = {};
-let ranked = [];
 let history = {};
 
-// 🔥 SAFE QUERY
+// 🔥 QUERY FUNCTION
 async function queryServer(host, port) {
   try {
     return await Promise.race([
@@ -46,126 +44,89 @@ async function queryServer(host, port) {
   }
 }
 
-// 📊 FETCH
-async function fetchServers() {
-  const results = await Promise.all(
+// 📊 UPDATE ALL SERVERS STATE
+async function updateState() {
+  await Promise.all(
     serversList.map(async (s) => {
       const key = `${s.host}:${s.port}`;
       const data = await queryServer(s.host, s.port);
-
       const prev = state[key];
 
-      // ✅ UPDATE თუ მოვიდა data
       if (data) {
-        const players = data.players.length;
-
         state[key] = {
           ip: key,
-          name: data.name || prev?.name || key,
-          players,
-          maxPlayers: data.maxplayers,
-          map: data.map,
+          name: data.name || key,
+          players: data.players?.length || 0,
+          maxPlayers: data.maxplayers || 0,
+          map: data.map || "unknown",
           online: true,
           lastSeen: Date.now()
         };
-      } else if (prev) {
-        // 🔥 KEEP OLD DATA
-        state[key] = {
-          ...prev,
-          online: true
-        };
       } else {
-        // fallback
         state[key] = {
           ip: key,
-          name: key,
+          name: prev?.name || key,
           players: 0,
-          maxPlayers: 0,
-          map: "unknown",
+          maxPlayers: prev?.maxPlayers || 0,
+          map: "offline",
           online: false
         };
       }
 
-      const currentPlayers = state[key].players;
-
-      // 📊 HISTORY
+      // HISTORY (optional analytics)
       if (!history[key]) history[key] = [];
 
       history[key].push({
         time: Date.now(),
-        players: currentPlayers
+        players: state[key].players
       });
 
       history[key] = history[key].filter(
         h => Date.now() - h.time <= DELTA_WINDOW
       );
-
-      const oldest = history[key][0];
-      const delta = oldest ? currentPlayers - oldest.players : 0;
-
-      return {
-        ...state[key],
-        change: delta
-      };
     })
   );
-
-  return results;
 }
 
-// 🏆 RANK
-function applyRank(data) {
-  return [...data]
-    .sort((a, b) => b.players - a.players)
+// 🏆 STABLE RANK CALCULATION (IMPORTANT)
+function getRankedServers() {
+  return Object.values(state)
+    .sort((a, b) => {
+      // primary sort: players
+      if (b.players !== a.players) return b.players - a.players;
+
+      // secondary sort: IP (fixes random browser differences)
+      return a.ip.localeCompare(b.ip);
+    })
     .map((s, i) => ({
       ...s,
       rank: i + 1
     }));
 }
 
-// 🔄 LIVE UPDATE
-async function liveUpdate() {
-  const data = await fetchServers();
+// 🔄 AUTO UPDATE LOOP
+setInterval(updateState, LIVE_REFRESH);
+updateState(); // initial load
 
-  ranked = ranked.map(r => {
-    const updated = data.find(d => d.ip === r.ip);
-    return updated ? { ...updated, rank: r.rank } : r;
-  });
-}
-
-// 🏆 HOURLY RANK
-async function hourlyUpdate() {
-  const data = await fetchServers();
-  ranked = applyRank(data);
-  console.log("🏆 Rank updated");
-}
-
-// 🚀 INIT
-(async () => {
-  const data = await fetchServers();
-  ranked = applyRank(data);
-})();
-
-// LOOPS
-setInterval(liveUpdate, LIVE_REFRESH);
-setInterval(hourlyUpdate, HOURLY_RANK);
-
-// 📡 API (CRITICAL FIX HERE)
+// 📡 API
 app.get("/servers", (req, res) => {
-  const final = ranked.map((s, i) => ({
-    ...s,
-    order: i // 🔒 FORCE ORDER
-  }));
+  const ranked = getRankedServers();
 
-  res.set("Cache-Control", "no-store"); // ❗ NO CACHE
-  res.json(final);
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0"
+  });
+
+  res.json(ranked);
 });
 
-// HEALTH
+// 🧪 HEALTH CHECK
 app.get("/", (req, res) => {
-  res.send("FINAL STABLE SYSTEM 🚀");
+  res.send("CS SERVER API RUNNING 🚀");
 });
 
+// 🚀 START SERVER
 app.listen(PORT, () => {
-  console.log(`Running on ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
