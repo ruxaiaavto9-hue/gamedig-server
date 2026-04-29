@@ -8,9 +8,10 @@ app.use(cors());
 const PORT = process.env.PORT || 3000;
 
 // ⏱️ SETTINGS
-const LIVE_REFRESH = 20000; // 20 sec
-const HOURLY_RANK = 60 * 60 * 1000; // 1 hour
-const TIMEOUT = 4500;
+const LIVE_REFRESH = 20000;
+const HOURLY_RANK = 60 * 60 * 1000;
+const DELTA_WINDOW = 4 * 60 * 1000; // 4 წუთი
+const TIMEOUT = 7000;
 
 // 📌 SERVERS
 const serversList = [
@@ -26,22 +27,16 @@ const serversList = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// 💾 STATE
-let state = [];
+// 💾 STATE (never lost)
+let state = {};
 let ranked = [];
+let history = {};
 
-// 🔥 IMPORTANT: 6H BASELINE STORAGE
-let baseline6h = {};
-
-// 🔥 SAFE QUERY (never crash)
+// 🔥 SAFE QUERY
 async function queryServer(host, port) {
   try {
     return await Promise.race([
-      Gamedig.query({
-        type: "cs16",
-        host,
-        port
-      }),
+      Gamedig.query({ type: "cs16", host, port }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("timeout")), TIMEOUT)
       )
@@ -51,32 +46,68 @@ async function queryServer(host, port) {
   }
 }
 
-// 📊 FETCH ALL SERVERS
+// 📊 FETCH (PARTIAL UPDATE SYSTEM)
 async function fetchServers() {
   const results = await Promise.all(
     serversList.map(async (s) => {
       const key = `${s.host}:${s.port}`;
       const data = await queryServer(s.host, s.port);
 
-      const players = data?.players?.length || 0;
+      const prev = state[key];
 
-      // 🟢 INIT BASELINE ONCE (CRITICAL FIX)
-      if (baseline6h[key] === undefined) {
-        baseline6h[key] = players;
+      // ✅ IF DATA EXISTS → UPDATE
+      if (data) {
+        const players = data.players.length;
+
+        state[key] = {
+          ip: key,
+          name: data.name || prev?.name || key,
+          players,
+          maxPlayers: data.maxplayers,
+          map: data.map,
+          online: true,
+          lastSeen: Date.now()
+        };
+      } else if (prev) {
+        // 🔥 KEEP OLD DATA (CRITICAL)
+        state[key] = {
+          ...prev,
+          online: true // ვიზუალურად არ გავთიშოთ
+        };
+      } else {
+        // პირველი load fallback
+        state[key] = {
+          ip: key,
+          name: key,
+          players: 0,
+          maxPlayers: 0,
+          map: "unknown",
+          online: false,
+          lastSeen: null
+        };
       }
 
-      // 🔥 CORRECT 6H Δ (THIS WAS BUGGED BEFORE)
-      const delta = players - baseline6h[key];
+      const currentPlayers = state[key].players;
+
+      // 🔥 HISTORY (for Δ)
+      if (!history[key]) history[key] = [];
+
+      history[key].push({
+        time: Date.now(),
+        players: currentPlayers
+      });
+
+      // წავშალოთ ძველი (4 წუთზე მეტი)
+      history[key] = history[key].filter(
+        h => Date.now() - h.time <= DELTA_WINDOW
+      );
+
+      // 🔥 DELTA CALCULATION
+      const oldest = history[key][0];
+      const delta = oldest ? currentPlayers - oldest.players : 0;
 
       return {
-        ip: key,
-        name: data?.name || key,
-        players,
-        maxPlayers: data?.maxplayers || 0,
-        map: data?.map || "offline",
-        online: !!data,
-
-        // 🔥 FIXED 6H Δ
+        ...state[key],
         change: delta
       };
     })
@@ -85,7 +116,7 @@ async function fetchServers() {
   return results;
 }
 
-// 🏆 HOURLY RANK (ONLY ONCE PER HOUR)
+// 🏆 RANK
 function applyRank(data) {
   return [...data]
     .sort((a, b) => b.players - a.players)
@@ -95,51 +126,44 @@ function applyRank(data) {
     }));
 }
 
-// 🔄 LIVE UPDATE (Δ ONLY)
+// 🔄 LIVE UPDATE (NO RANK CHANGE)
 async function liveUpdate() {
-  state = await fetchServers();
+  const data = await fetchServers();
+
+  ranked = ranked.map(r => {
+    const updated = data.find(d => d.ip === r.ip);
+    return updated ? { ...updated, rank: r.rank } : r;
+  });
 }
 
-// 🏆 HOURLY RANK UPDATE (POSITION CHANGE ONLY HERE)
+// 🏆 HOURLY RANK UPDATE
 async function hourlyUpdate() {
   const data = await fetchServers();
   ranked = applyRank(data);
 
-  console.log("🏆 Hourly rank updated");
+  console.log("🏆 Rank updated");
 }
 
 // 🚀 INIT
 (async () => {
   const data = await fetchServers();
-  state = data;
   ranked = applyRank(data);
 })();
 
-// 🔄 LIVE LOOP
+// LOOPS
 setInterval(liveUpdate, LIVE_REFRESH);
-
-// 🏆 HOURLY LOOP
 setInterval(hourlyUpdate, HOURLY_RANK);
 
-// 📡 API (UNIFIED FOR ALL DEVICES)
+// API
 app.get("/servers", (req, res) => {
-  const merged = state.map(s => {
-    const r = ranked.find(x => x.ip === s.ip);
-
-    return {
-      ...s,
-      rank: r?.rank || 0
-    };
-  });
-
-  res.json(merged);
+  res.json(ranked);
 });
 
-// ❤️ health
+// HEALTH
 app.get("/", (req, res) => {
-  res.send("FIXED 6H Δ + HOURLY RANK SYSTEM 🚀");
+  res.send("STABLE CS SERVER SYSTEM 🚀");
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on ${PORT}`);
+  console.log(`Running on ${PORT}`);
 });
