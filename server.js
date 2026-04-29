@@ -8,26 +8,27 @@ app.use(cors());
 const PORT = process.env.PORT || 3000;
 
 // ⏱ SETTINGS
-const LIVE_REFRESH = 20000;
 const TIMEOUT = 8000;
+const REFRESH = 20000;
 
-// 📌 REAL SERVERS
+// 📌 SERVERS
 const serversList = [
-  { host: "80.241.246.26", port: 222, name: "CS 1.6 | Public #1" },
-  { host: "80.241.246.26", port: 226, name: "CS 1.6 | Dust2 Only" },
-  { host: "80.241.246.26", port: 27999, name: "CS 1.6 | Jailbreak" },
-  { host: "80.241.246.26", port: 26, name: "CS 1.6 | AWP Arena" },
-  { host: "80.241.246.26", port: 27016, name: "CS 1.6 | Deathmatch" },
-  { host: "80.241.246.26", port: 336, name: "CS 1.6 | Classic Mix" },
-  { host: "80.241.246.26", port: 27446, name: "CS 1.6 | Public #2" },
-  { host: "80.241.246.26", port: 27017, name: "CS 1.6 | Fun Server" },
-  { host: "80.241.246.26", port: 126, name: "CS 1.6 | Pro Players" },
-  { host: "80.241.246.26", port: 346, name: "CS 1.6 | Hardcore" }
+  { host: "80.241.246.26", port: 222 },
+  { host: "80.241.246.26", port: 226 },
+  { host: "80.241.246.26", port: 27999 },
+  { host: "80.241.246.26", port: 26 },
+  { host: "80.241.246.26", port: 27016 },
+  { host: "80.241.246.26", port: 336 },
+  { host: "80.241.246.26", port: 27446 },
+  { host: "80.241.246.26", port: 27017 },
+  { host: "80.241.246.26", port: 126 },
+  { host: "80.241.246.26", port: 346 }
 ];
 
-// 💾 ALWAYS READY CACHE (CRITICAL FIX)
+// 💾 STATE
 let cache = [];
 let isReady = false;
+let loadingProgress = 0;
 
 // 🔥 QUERY
 async function queryServer(host, port) {
@@ -43,27 +44,30 @@ async function queryServer(host, port) {
   }
 }
 
-// 📊 BUILD SNAPSHOT
+// 📊 BUILD SNAPSHOT (WITH PROGRESS)
 async function buildSnapshot() {
-  const results = await Promise.all(
-    serversList.map(async (s, index) => {
-      const data = await queryServer(s.host, s.port);
+  loadingProgress = 0;
+  const total = serversList.length;
 
-      const players = data?.players?.length || 0;
+  const results = [];
 
-      return {
-        ip: `${s.host}:${s.port}`,
-        name: s.name,
-        players: players,
-        maxPlayers: data?.maxplayers || 32,
-        map: data?.map || "unknown",
-        online: !!data,
-        rank: index + 1
-      };
-    })
-  );
+  for (let i = 0; i < serversList.length; i++) {
+    const s = serversList[i];
 
-  // sort by players (stable)
+    const data = await queryServer(s.host, s.port);
+
+    results.push({
+      ip: `${s.host}:${s.port}`,
+      name: data?.name || "Loading Server...",
+      players: data?.players?.length || 0,
+      maxPlayers: data?.maxplayers || 32,
+      map: data?.map || "unknown",
+      online: !!data
+    });
+
+    loadingProgress = Math.round(((i + 1) / total) * 100);
+  }
+
   cache = results
     .sort((a, b) => {
       if (b.players !== a.players) return b.players - a.players;
@@ -75,41 +79,43 @@ async function buildSnapshot() {
     }));
 
   isReady = true;
-  console.log("✅ Snapshot updated");
 }
 
-// 🚀 INIT (NO 0 ONLINE FLASH FIX)
+// 🚀 INIT (PRELOAD BEFORE USERS SEE DATA)
 (async () => {
   console.log("⏳ Loading servers...");
-
-  await buildSnapshot(); // preload BEFORE requests allowed
-
-  console.log("🚀 READY (no empty state)");
+  await buildSnapshot();
+  console.log("🚀 READY");
 })();
 
 // 🔄 REFRESH LOOP
-setInterval(buildSnapshot, LIVE_REFRESH);
+setInterval(buildSnapshot, REFRESH);
 
-// 📡 API (INSTANT RESPONSE)
+// 📡 API (LOADING STATE INCLUDED)
 app.get("/servers", (req, res) => {
-  // 🚨 NEVER show loading state
-  if (!isReady || cache.length === 0) {
-    return res.json(cache);
+  res.set("Cache-Control", "no-store");
+
+  // ⛔ NOT READY YET
+  if (!isReady) {
+    return res.json({
+      loading: true,
+      progress: loadingProgress,
+      message: "Loading servers..."
+    });
   }
 
-  res.set({
-    "Cache-Control": "no-store, no-cache, must-revalidate"
+  res.json({
+    loading: false,
+    progress: 100,
+    servers: cache
   });
-
-  res.json(cache);
 });
 
 // 🧪 HEALTH
 app.get("/", (req, res) => {
-  res.send("STABLE CS 1.6 SERVER LIST 🚀");
+  res.send("LOADING SYSTEM READY 🚀");
 });
 
-// 🚀 START
 app.listen(PORT, () => {
-  console.log(`Server running on ${PORT}`);
+  console.log(`Running on ${PORT}`);
 });
