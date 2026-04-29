@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 // ⏱️ SETTINGS
 const LIVE_REFRESH = 20000;
 const HOURLY_RANK = 60 * 60 * 1000;
-const DELTA_WINDOW = 4 * 60 * 1000; // 4 წუთი
+const DELTA_WINDOW = 4 * 60 * 1000;
 const TIMEOUT = 7000;
 
 // 📌 SERVERS
@@ -27,7 +27,7 @@ const serversList = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// 💾 STATE (never lost)
+// 💾 STATE
 let state = {};
 let ranked = [];
 let history = {};
@@ -46,7 +46,7 @@ async function queryServer(host, port) {
   }
 }
 
-// 📊 FETCH (PARTIAL UPDATE SYSTEM)
+// 📊 FETCH
 async function fetchServers() {
   const results = await Promise.all(
     serversList.map(async (s) => {
@@ -55,7 +55,7 @@ async function fetchServers() {
 
       const prev = state[key];
 
-      // ✅ IF DATA EXISTS → UPDATE
+      // ✅ UPDATE თუ მოვიდა data
       if (data) {
         const players = data.players.length;
 
@@ -69,27 +69,26 @@ async function fetchServers() {
           lastSeen: Date.now()
         };
       } else if (prev) {
-        // 🔥 KEEP OLD DATA (CRITICAL)
+        // 🔥 KEEP OLD DATA
         state[key] = {
           ...prev,
-          online: true // ვიზუალურად არ გავთიშოთ
+          online: true
         };
       } else {
-        // პირველი load fallback
+        // fallback
         state[key] = {
           ip: key,
           name: key,
           players: 0,
           maxPlayers: 0,
           map: "unknown",
-          online: false,
-          lastSeen: null
+          online: false
         };
       }
 
       const currentPlayers = state[key].players;
 
-      // 🔥 HISTORY (for Δ)
+      // 📊 HISTORY
       if (!history[key]) history[key] = [];
 
       history[key].push({
@@ -97,12 +96,10 @@ async function fetchServers() {
         players: currentPlayers
       });
 
-      // წავშალოთ ძველი (4 წუთზე მეტი)
       history[key] = history[key].filter(
         h => Date.now() - h.time <= DELTA_WINDOW
       );
 
-      // 🔥 DELTA CALCULATION
       const oldest = history[key][0];
       const delta = oldest ? currentPlayers - oldest.players : 0;
 
@@ -126,7 +123,7 @@ function applyRank(data) {
     }));
 }
 
-// 🔄 LIVE UPDATE (NO RANK CHANGE)
+// 🔄 LIVE UPDATE
 async function liveUpdate() {
   const data = await fetchServers();
 
@@ -136,11 +133,10 @@ async function liveUpdate() {
   });
 }
 
-// 🏆 HOURLY RANK UPDATE
+// 🏆 HOURLY RANK
 async function hourlyUpdate() {
   const data = await fetchServers();
   ranked = applyRank(data);
-
   console.log("🏆 Rank updated");
 }
 
@@ -154,14 +150,20 @@ async function hourlyUpdate() {
 setInterval(liveUpdate, LIVE_REFRESH);
 setInterval(hourlyUpdate, HOURLY_RANK);
 
-// API
+// 📡 API (CRITICAL FIX HERE)
 app.get("/servers", (req, res) => {
-  res.json(ranked);
+  const final = ranked.map((s, i) => ({
+    ...s,
+    order: i // 🔒 FORCE ORDER
+  }));
+
+  res.set("Cache-Control", "no-store"); // ❗ NO CACHE
+  res.json(final);
 });
 
 // HEALTH
 app.get("/", (req, res) => {
-  res.send("STABLE CS SERVER SYSTEM 🚀");
+  res.send("FINAL STABLE SYSTEM 🚀");
 });
 
 app.listen(PORT, () => {
