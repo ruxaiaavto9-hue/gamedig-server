@@ -2,8 +2,19 @@ const express = require("express");
 const cors = require("cors");
 const Gamedig = require("gamedig");
 
+// 🔥 ADDED (chatისთვის)
+const http = require("http");
+const { Server } = require("socket.io");
+
 const app = express();
 app.use(cors());
+
+// 🔥 ADDED
+app.use(express.json());
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" }
+});
 
 const PORT = process.env.PORT || 3000;
 
@@ -27,6 +38,12 @@ const serversList = [
 let cache = {};
 let rankedServers = [];
 
+// 🔥 ADDED (chat storage)
+let chatMessages = [];
+let userCooldowns = {};
+const MAX_MESSAGES = 50;
+const MESSAGE_COOLDOWN = 2000;
+
 // 🔥 QUERY
 async function queryServer(host, port) {
   try {
@@ -48,7 +65,6 @@ async function updateRanks() {
       const key = `${s.host}:${s.port}`;
       const data = await queryServer(s.host, s.port);
 
-      // 🔥 CRITICAL FIX: KEEP OLD DATA IF NEW FAILS
       const prev = cache[key];
 
       const updated = {
@@ -57,10 +73,7 @@ async function updateRanks() {
         players: data?.players?.length ?? prev?.players ?? 0,
         maxPlayers: data?.maxplayers ?? prev?.maxPlayers ?? 32,
         map: data?.map || prev?.map || "unknown",
-
-        // 🔥 IMPORTANT FIX:
         online: data ? true : (prev?.online ?? false),
-
         lastUpdate: data ? Date.now() : (prev?.lastUpdate || Date.now())
       };
 
@@ -69,7 +82,6 @@ async function updateRanks() {
     })
   );
 
-  // 🏆 stable ranking (NO DROPS)
   rankedServers = Object.values(cache)
     .sort((a, b) => {
       if (b.players !== a.players) return b.players - a.players;
@@ -89,6 +101,45 @@ async function updateRanks() {
 
 setInterval(updateRanks, UPDATE_INTERVAL);
 
+// ====================
+// 💬 CHAT SOCKET (ADDED)
+// ====================
+io.on("connection", (socket) => {
+  socket.emit("chat_history", chatMessages);
+
+  socket.on("send_message", ({ nickname, message }) => {
+    if (!nickname || !message) return;
+
+    const now = Date.now();
+    const last = userCooldowns[socket.id] || 0;
+
+    if (now - last < MESSAGE_COOLDOWN) {
+      socket.emit("spam_warning", "Wait 2 sec");
+      return;
+    }
+
+    userCooldowns[socket.id] = now;
+
+    const msg = {
+      nickname: nickname.slice(0, 16),
+      message: message.slice(0, 150),
+      time: now
+    };
+
+    chatMessages.push(msg);
+
+    if (chatMessages.length > MAX_MESSAGES) {
+      chatMessages.shift();
+    }
+
+    io.emit("new_message", msg);
+  });
+
+  socket.on("disconnect", () => {
+    delete userCooldowns[socket.id];
+  });
+});
+
 // 📡 API
 app.get("/servers", (req, res) => {
   res.set("Cache-Control", "no-store");
@@ -98,11 +149,17 @@ app.get("/servers", (req, res) => {
   });
 });
 
-// 🧪 HEALTH
-app.get("/", (req, res) => {
-  res.send("NO DROP STABLE SERVER SYSTEM 🚀");
+// 🔥 ADDED (optional chat endpoint)
+app.get("/chat", (req, res) => {
+  res.json({ messages: chatMessages });
 });
 
-app.listen(PORT, () => {
+// 🧪 HEALTH
+app.get("/", (req, res) => {
+  res.send("NO DROP STABLE SERVER SYSTEM 🚀 + CHAT");
+});
+
+// ❗ CHANGED ONLY THIS (socket.io requires it)
+server.listen(PORT, () => {
   console.log(`Running on ${PORT}`);
 });
