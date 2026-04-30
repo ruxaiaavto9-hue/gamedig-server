@@ -5,6 +5,8 @@ const Gamedig = require("gamedig");
 const http = require("http");
 const { Server } = require("socket.io");
 
+const fs = require("fs");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -42,13 +44,28 @@ let cache = {};
 let rankedServers = [];
 
 // ====================
-// 💬 CHAT SYSTEM
+// 💬 CHAT STORAGE (PERSISTENT FIX)
 // ====================
-let chatMessages = [];
-let userCooldowns = {};
-
+const CHAT_FILE = "./chat.json";
 const MAX_MESSAGES = 50;
 const MESSAGE_COOLDOWN = 2000;
+
+// load chat from file
+function loadChat() {
+  try {
+    return JSON.parse(fs.readFileSync(CHAT_FILE));
+  } catch {
+    return [];
+  }
+}
+
+// save chat to file
+function saveChat(data) {
+  fs.writeFileSync(CHAT_FILE, JSON.stringify(data));
+}
+
+let chatMessages = loadChat();
+let userCooldowns = {};
 
 // ====================
 // 🎮 GAMEDIG QUERY
@@ -119,7 +136,7 @@ setInterval(updateRanks, UPDATE_INTERVAL);
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  // 🔥 ახალ user-ზე ძველი ჩატი
+  // 🔥 send old chat to new user
   socket.emit("chat_history", chatMessages);
 
   socket.on("send_message", ({ nickname, message }) => {
@@ -128,7 +145,6 @@ io.on("connection", (socket) => {
     const now = Date.now();
     const last = userCooldowns[socket.id] || 0;
 
-    // anti-spam
     if (now - last < MESSAGE_COOLDOWN) {
       socket.emit("spam_warning", "Wait 2 sec");
       return;
@@ -144,12 +160,15 @@ io.on("connection", (socket) => {
 
     chatMessages.push(msg);
 
-    // 🔥 50 მესიჯზე reset
+    // 🔥 limit 50 messages
     if (chatMessages.length >= MAX_MESSAGES) {
       chatMessages = [];
+      saveChat(chatMessages);
       io.emit("chat_clear");
       return;
     }
+
+    saveChat(chatMessages);
 
     io.emit("new_message", msg);
   });
@@ -167,7 +186,7 @@ app.get("/servers", (req, res) => {
   res.json({ servers: rankedServers });
 });
 
-// optional chat endpoint
+// optional chat API
 app.get("/chat", (req, res) => {
   res.json({ messages: chatMessages });
 });
@@ -176,7 +195,7 @@ app.get("/chat", (req, res) => {
 // 🧪 HEALTH
 // ====================
 app.get("/", (req, res) => {
-  res.send("NO DROP STABLE SERVER SYSTEM 🚀 + PREMIUM CHAT");
+  res.send("NO DROP STABLE SERVER SYSTEM 🚀 + PERSISTENT CHAT FIXED");
 });
 
 // ====================
