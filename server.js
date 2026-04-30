@@ -2,15 +2,13 @@ const express = require("express");
 const cors = require("cors");
 const Gamedig = require("gamedig");
 
-// 🔥 ADDED (chatისთვის)
 const http = require("http");
 const { Server } = require("socket.io");
 
 const app = express();
 app.use(cors());
-
-// 🔥 ADDED
 app.use(express.json());
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*" }
@@ -21,6 +19,9 @@ const PORT = process.env.PORT || 3000;
 const UPDATE_INTERVAL = 20000;
 const TIMEOUT = 8000;
 
+// ====================
+// 🎮 SERVERS
+// ====================
 const serversList = [
   { host: "80.241.246.26", port: 222 },
   { host: "80.241.246.26", port: 226 },
@@ -34,17 +35,24 @@ const serversList = [
   { host: "80.241.246.26", port: 346 }
 ];
 
-// 💾 LAST KNOWN GOOD STATE (CRITICAL FIX)
+// ====================
+// 💾 CACHE SYSTEM
+// ====================
 let cache = {};
 let rankedServers = [];
 
-// 🔥 ADDED (chat storage)
+// ====================
+// 💬 CHAT SYSTEM
+// ====================
 let chatMessages = [];
 let userCooldowns = {};
+
 const MAX_MESSAGES = 50;
 const MESSAGE_COOLDOWN = 2000;
 
-// 🔥 QUERY
+// ====================
+// 🎮 GAMEDIG QUERY
+// ====================
 async function queryServer(host, port) {
   try {
     return await Promise.race([
@@ -58,7 +66,9 @@ async function queryServer(host, port) {
   }
 }
 
-// 📊 UPDATE (NO DATA LOSS LOGIC)
+// ====================
+// 📊 UPDATE SERVERS
+// ====================
 async function updateRanks() {
   const results = await Promise.all(
     serversList.map(async (s) => {
@@ -93,7 +103,9 @@ async function updateRanks() {
     }));
 }
 
+// ====================
 // 🚀 INIT
+// ====================
 (async () => {
   await updateRanks();
   console.log("🚀 Initial load done");
@@ -102,9 +114,12 @@ async function updateRanks() {
 setInterval(updateRanks, UPDATE_INTERVAL);
 
 // ====================
-// 💬 CHAT SOCKET (ADDED)
+// 💬 SOCKET.IO CHAT
 // ====================
 io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
+
+  // 🔥 ახალ user-ზე ძველი ჩატი
   socket.emit("chat_history", chatMessages);
 
   socket.on("send_message", ({ nickname, message }) => {
@@ -113,6 +128,7 @@ io.on("connection", (socket) => {
     const now = Date.now();
     const last = userCooldowns[socket.id] || 0;
 
+    // anti-spam
     if (now - last < MESSAGE_COOLDOWN) {
       socket.emit("spam_warning", "Wait 2 sec");
       return;
@@ -128,8 +144,11 @@ io.on("connection", (socket) => {
 
     chatMessages.push(msg);
 
-    if (chatMessages.length > MAX_MESSAGES) {
-      chatMessages.shift();
+    // 🔥 50 მესიჯზე reset
+    if (chatMessages.length >= MAX_MESSAGES) {
+      chatMessages = [];
+      io.emit("chat_clear");
+      return;
     }
 
     io.emit("new_message", msg);
@@ -140,26 +159,29 @@ io.on("connection", (socket) => {
   });
 });
 
+// ====================
 // 📡 API
+// ====================
 app.get("/servers", (req, res) => {
   res.set("Cache-Control", "no-store");
-
-  res.json({
-    servers: rankedServers
-  });
+  res.json({ servers: rankedServers });
 });
 
-// 🔥 ADDED (optional chat endpoint)
+// optional chat endpoint
 app.get("/chat", (req, res) => {
   res.json({ messages: chatMessages });
 });
 
+// ====================
 // 🧪 HEALTH
+// ====================
 app.get("/", (req, res) => {
-  res.send("NO DROP STABLE SERVER SYSTEM 🚀 + CHAT");
+  res.send("NO DROP STABLE SERVER SYSTEM 🚀 + PREMIUM CHAT");
 });
 
-// ❗ CHANGED ONLY THIS (socket.io requires it)
+// ====================
+// 🚀 START
+// ====================
 server.listen(PORT, () => {
   console.log(`Running on ${PORT}`);
 });
