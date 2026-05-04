@@ -8,14 +8,24 @@ const { Server } = require("socket.io");
 const fs = require("fs");
 
 // ====================
-// 🟢 SUPABASE (CRASH SAFE STORAGE)
+// 🟡 SAFE SUPABASE IMPORT (FIX)
 // ====================
-const { createClient } = require("@supabase/supabase-js");
+let supabase = null;
 
-const supabase = createClient(
-  "YOUR_SUPABASE_URL",
-  "YOUR_SUPABASE_KEY"
-);
+try {
+  const { createClient } = require("@supabase/supabase-js");
+
+  supabase = createClient(
+    "YOUR_SUPABASE_URL",
+    "YOUR_SUPABASE_KEY"
+  );
+
+  console.log("🟢 Supabase connected");
+} catch (e) {
+  console.log("⚠️ Supabase not installed - running without DB");
+}
+
+// ====================
 
 const app = express();
 app.use(cors());
@@ -62,31 +72,10 @@ const serversList = [
 // ====================
 let cache = {};
 let rankedServers = {};
+let stats24h = {};
 
 // ====================
-// 💬 CHAT STORAGE (UNCHANGED)
-// ====================
-const CHAT_FILE = "./chat.json";
-const MAX_MESSAGES = 50;
-const MESSAGE_COOLDOWN = 2000;
-
-function loadChat() {
-  try {
-    return JSON.parse(fs.readFileSync(CHAT_FILE));
-  } catch {
-    return [];
-  }
-}
-
-function saveChat(data) {
-  fs.writeFileSync(CHAT_FILE, JSON.stringify(data));
-}
-
-let chatMessages = loadChat();
-let userCooldowns = {};
-
-// ====================
-// 🎮 GAMEDIG QUERY
+// 🎮 GAMEDIG
 // ====================
 async function queryServer(host, port) {
   try {
@@ -102,9 +91,11 @@ async function queryServer(host, port) {
 }
 
 // ====================
-// 💾 SAVE TO DB (CRASH SAFE)
+// 💾 SAFE DB SAVE (ONLY IF SUPABASE EXISTS)
 // ====================
 async function saveToDB(serverId, players) {
+  if (!supabase) return;
+
   try {
     await supabase.from("server_stats").insert([
       {
@@ -114,14 +105,16 @@ async function saveToDB(serverId, players) {
       }
     ]);
   } catch (e) {
-    console.log("DB save error:", e.message);
+    console.log("DB save failed:", e.message);
   }
 }
 
 // ====================
-// 📥 GET 24H HISTORY FROM DB
+// 📥 HISTORY (SAFE)
 // ====================
 async function getHistory(serverId) {
+  if (!supabase) return [];
+
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
 
   const { data } = await supabase
@@ -134,14 +127,13 @@ async function getHistory(serverId) {
 }
 
 // ====================
-// 🧠 SCORE FORMULA
+// 🧠 SCORE
 // ====================
 function calculateScore(data) {
   if (!data || !data.length) return 0;
 
   const total = data.reduce((sum, d) => sum + d.players, 0);
   const avg = total / data.length;
-
   const peak = Math.max(...data.map(d => d.players));
 
   const active = data.filter(d => d.players >= 5).length;
@@ -154,7 +146,7 @@ function calculateScore(data) {
 // 📊 UPDATE SYSTEM
 // ====================
 async function updateRanks() {
-  const results = await Promise.all(
+  await Promise.all(
     serversList.map(async (s) => {
       const key = `${s.host}:${s.port}`;
       const data = await queryServer(s.host, s.port);
@@ -163,27 +155,21 @@ async function updateRanks() {
 
       const playersNow = data?.players?.length ?? prev?.players ?? 0;
 
-      // 💾 SAVE HISTORY (NO LOSS ON CRASH)
+      // 💾 DB SAVE (ONLY IF EXISTS)
       await saveToDB(key, playersNow);
 
-      const updated = {
+      cache[key] = {
         ip: key,
-        name: data?.name || prev?.name || "Unknown Server",
+        name: data?.name || prev?.name || "Unknown",
         players: playersNow,
         maxPlayers: data?.maxplayers ?? prev?.maxPlayers ?? 32,
         map: data?.map || prev?.map || "unknown",
         online: !!data,
         lastUpdate: Date.now()
       };
-
-      cache[key] = updated;
-      return updated;
     })
   );
 
-  // ====================
-  // 🏆 RANKING (FROM DB)
-  // ====================
   const enriched = await Promise.all(
     Object.values(cache).map(async (s) => {
       const history = await getHistory(s.ip);
@@ -192,71 +178,24 @@ async function updateRanks() {
         history.map(h => ({ players: h.players }))
       );
 
-      return {
-        ...s,
-        score
-      };
+      return { ...s, score };
     })
   );
 
   rankedServers = enriched
     .sort((a, b) => b.score - a.score)
-    .map((s, i) => ({
-      ...s,
-      rank: i + 1
-    }));
+    .map((s, i) => ({ ...s, rank: i + 1 }));
 }
 
 // ====================
-// 🚀 INIT
+// 🚀 START
 // ====================
 (async () => {
   await updateRanks();
-  console.log("🚀 CRASH-SAFE SYSTEM ACTIVE");
+  console.log("🚀 SYSTEM STARTED (SAFE MODE)");
 })();
 
 setInterval(updateRanks, UPDATE_INTERVAL);
-
-// ====================
-// 💬 SOCKET CHAT (UNCHANGED)
-// ====================
-io.on("connection", (socket) => {
-  socket.emit("chat_history", chatMessages);
-
-  socket.on("send_message", ({ nickname, message }) => {
-    const now = Date.now();
-    const last = userCooldowns[socket.id] || 0;
-
-    if (now - last < MESSAGE_COOLDOWN) {
-      socket.emit("spam_warning", "Wait 2 sec");
-      return;
-    }
-
-    userCooldowns[socket.id] = now;
-
-    const msg = {
-      nickname: nickname.slice(0, 16),
-      message: message.slice(0, 150),
-      time: now
-    };
-
-    chatMessages.push(msg);
-
-    if (chatMessages.length >= MAX_MESSAGES) {
-      chatMessages = [];
-      saveChat(chatMessages);
-      io.emit("chat_clear");
-      return;
-    }
-
-    saveChat(chatMessages);
-    io.emit("new_message", msg);
-  });
-
-  socket.on("disconnect", () => {
-    delete userCooldowns[socket.id];
-  });
-});
 
 // ====================
 // 📡 API
@@ -267,11 +206,9 @@ app.get("/servers", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("CRASH-SAFE SERVER RANKING SYSTEM 🚀");
+  res.send("SAFE SERVER SYSTEM 🚀");
 });
 
-// ====================
-// 🚀 START
 // ====================
 server.listen(PORT, () => {
   console.log(`Running on ${PORT}`);
