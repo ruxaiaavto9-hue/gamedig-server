@@ -48,19 +48,19 @@ const serversList = [
 ];
 
 // ====================
-// 💾 CACHE SYSTEM
+// 💾 CACHE + 24H DATA
 // ====================
 let cache = {};
-let rankedServers = [];
+let rankedServers = {};
+let stats24h = {};
 
 // ====================
-// 💬 CHAT STORAGE (PERSISTENT FIX)
+// 💬 CHAT STORAGE
 // ====================
 const CHAT_FILE = "./chat.json";
 const MAX_MESSAGES = 50;
 const MESSAGE_COOLDOWN = 2000;
 
-// load chat from file
 function loadChat() {
   try {
     return JSON.parse(fs.readFileSync(CHAT_FILE));
@@ -69,7 +69,6 @@ function loadChat() {
   }
 }
 
-// save chat to file
 function saveChat(data) {
   fs.writeFileSync(CHAT_FILE, JSON.stringify(data));
 }
@@ -94,6 +93,23 @@ async function queryServer(host, port) {
 }
 
 // ====================
+// 🧠 SCORE FUNCTION
+// ====================
+function calculateScore(data) {
+  if (!data || !data.length) return 0;
+
+  const total = data.reduce((sum, d) => sum + d.players, 0);
+  const avg = total / data.length;
+
+  const peak = Math.max(...data.map(d => d.players));
+
+  const active = data.filter(d => d.players >= 5).length;
+  const stability = active / data.length;
+
+  return Number((avg * 0.6 + peak * 0.3 + stability * 10).toFixed(2));
+}
+
+// ====================
 // 📊 UPDATE SERVERS
 // ====================
 async function updateRanks() {
@@ -104,14 +120,29 @@ async function updateRanks() {
 
       const prev = cache[key];
 
+      const playersNow = data?.players?.length ?? prev?.players ?? 0;
+
+      // init history
+      if (!stats24h[key]) stats24h[key] = [];
+
+      // add record
+      stats24h[key].push({
+        players: playersNow,
+        timestamp: Date.now()
+      });
+
+      // remove old (24h)
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      stats24h[key] = stats24h[key].filter(d => d.timestamp > cutoff);
+
       const updated = {
         ip: key,
         name: data?.name || prev?.name || "Unknown Server",
-        players: data?.players?.length ?? prev?.players ?? 0,
+        players: playersNow,
         maxPlayers: data?.maxplayers ?? prev?.maxPlayers ?? 32,
         map: data?.map || prev?.map || "unknown",
         online: data ? true : (prev?.online ?? false),
-        lastUpdate: data ? Date.now() : (prev?.lastUpdate || Date.now())
+        lastUpdate: Date.now()
       };
 
       cache[key] = updated;
@@ -119,11 +150,20 @@ async function updateRanks() {
     })
   );
 
+  // ====================
+  // 🏆 RANKING BY SCORE
+  // ====================
   rankedServers = Object.values(cache)
-    .sort((a, b) => {
-      if (b.players !== a.players) return b.players - a.players;
-      return a.ip.localeCompare(b.ip);
+    .map(s => {
+      const history = stats24h[s.ip] || [];
+      const score = calculateScore(history);
+
+      return {
+        ...s,
+        score
+      };
     })
+    .sort((a, b) => b.score - a.score)
     .map((s, i) => ({
       ...s,
       rank: i + 1
@@ -144,14 +184,9 @@ setInterval(updateRanks, UPDATE_INTERVAL);
 // 💬 SOCKET.IO CHAT
 // ====================
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
-
-  // 🔥 send old chat to new user
   socket.emit("chat_history", chatMessages);
 
   socket.on("send_message", ({ nickname, message }) => {
-    if (!nickname || !message) return;
-
     const now = Date.now();
     const last = userCooldowns[socket.id] || 0;
 
@@ -170,7 +205,6 @@ io.on("connection", (socket) => {
 
     chatMessages.push(msg);
 
-    // 🔥 limit 50 messages
     if (chatMessages.length >= MAX_MESSAGES) {
       chatMessages = [];
       saveChat(chatMessages);
@@ -179,7 +213,6 @@ io.on("connection", (socket) => {
     }
 
     saveChat(chatMessages);
-
     io.emit("new_message", msg);
   });
 
@@ -196,16 +229,12 @@ app.get("/servers", (req, res) => {
   res.json({ servers: rankedServers });
 });
 
-// optional chat API
 app.get("/chat", (req, res) => {
   res.json({ messages: chatMessages });
 });
 
-// ====================
-// 🧪 HEALTH
-// ====================
 app.get("/", (req, res) => {
-  res.send("NO DROP STABLE SERVER SYSTEM 🚀 + PERSISTENT CHAT FIXED");
+  res.send("NO DROP STABLE SERVER SYSTEM 🚀 + 24H RANKING SYSTEM");
 });
 
 // ====================
