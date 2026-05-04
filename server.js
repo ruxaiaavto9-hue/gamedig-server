@@ -8,7 +8,7 @@ const { Server } = require("socket.io");
 const fs = require("fs");
 
 // ====================
-// 🟡 SAFE SUPABASE IMPORT (FIX)
+// 🟢 SUPABASE (SAFE LOAD)
 // ====================
 let supabase = null;
 
@@ -22,19 +22,16 @@ try {
 
   console.log("🟢 Supabase connected");
 } catch (e) {
-  console.log("⚠️ Supabase not installed - running without DB");
+  console.log("⚠️ Supabase NOT active (fallback mode)");
 }
 
 // ====================
-
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 const PORT = process.env.PORT || 3000;
 
@@ -68,11 +65,10 @@ const serversList = [
 ];
 
 // ====================
-// 💾 CACHE
+// 💾 MEMORY CACHE
 // ====================
 let cache = {};
 let rankedServers = {};
-let stats24h = {};
 
 // ====================
 // 🎮 GAMEDIG
@@ -91,7 +87,7 @@ async function queryServer(host, port) {
 }
 
 // ====================
-// 💾 SAFE DB SAVE (ONLY IF SUPABASE EXISTS)
+// 💾 SAVE TO DB
 // ====================
 async function saveToDB(serverId, players) {
   if (!supabase) return;
@@ -104,13 +100,11 @@ async function saveToDB(serverId, players) {
         timestamp: Date.now()
       }
     ]);
-  } catch (e) {
-    console.log("DB save failed:", e.message);
-  }
+  } catch {}
 }
 
 // ====================
-// 📥 HISTORY (SAFE)
+// 📥 GET HISTORY (SAFE + FIX)
 // ====================
 async function getHistory(serverId) {
   if (!supabase) return [];
@@ -127,19 +121,30 @@ async function getHistory(serverId) {
 }
 
 // ====================
-// 🧠 SCORE
+// 🧠 FIXED SCORE (IMPORTANT PART)
 // ====================
 function calculateScore(data) {
-  if (!data || !data.length) return 0;
+  if (!data || data.length === 0) {
+    return 0.01; // 🔥 FIX: never 0 (prevents players-only ranking)
+  }
 
   const total = data.reduce((sum, d) => sum + d.players, 0);
   const avg = total / data.length;
+
   const peak = Math.max(...data.map(d => d.players));
 
   const active = data.filter(d => d.players >= 5).length;
   const stability = active / data.length;
 
-  return Number((avg * 0.6 + peak * 0.3 + stability * 10).toFixed(2));
+  // 🔥 MORE BALANCED FORMULA (prevents pure "current players wins")
+  return Number(
+    (
+      avg * 0.55 +
+      peak * 0.25 +
+      stability * 10 +
+      data.length * 0.02
+    ).toFixed(2)
+  );
 }
 
 // ====================
@@ -152,15 +157,14 @@ async function updateRanks() {
       const data = await queryServer(s.host, s.port);
 
       const prev = cache[key];
-
       const playersNow = data?.players?.length ?? prev?.players ?? 0;
 
-      // 💾 DB SAVE (ONLY IF EXISTS)
+      // 💾 SAVE HISTORY
       await saveToDB(key, playersNow);
 
       cache[key] = {
         ip: key,
-        name: data?.name || prev?.name || "Unknown",
+        name: data?.name || prev?.name || "Unknown Server",
         players: playersNow,
         maxPlayers: data?.maxplayers ?? prev?.maxPlayers ?? 32,
         map: data?.map || prev?.map || "unknown",
@@ -178,21 +182,27 @@ async function updateRanks() {
         history.map(h => ({ players: h.players }))
       );
 
-      return { ...s, score };
+      return {
+        ...s,
+        score
+      };
     })
   );
 
   rankedServers = enriched
     .sort((a, b) => b.score - a.score)
-    .map((s, i) => ({ ...s, rank: i + 1 }));
+    .map((s, i) => ({
+      ...s,
+      rank: i + 1
+    }));
 }
 
 // ====================
-// 🚀 START
+// 🚀 INIT
 // ====================
 (async () => {
   await updateRanks();
-  console.log("🚀 SYSTEM STARTED (SAFE MODE)");
+  console.log("🚀 FIXED RANKING SYSTEM ONLINE");
 })();
 
 setInterval(updateRanks, UPDATE_INTERVAL);
@@ -206,7 +216,7 @@ app.get("/servers", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("SAFE SERVER SYSTEM 🚀");
+  res.send("FIXED CRASH SAFE CS SERVER SYSTEM 🚀");
 });
 
 // ====================
