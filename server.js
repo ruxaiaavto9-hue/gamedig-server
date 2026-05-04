@@ -4,11 +4,10 @@ const Gamedig = require("gamedig");
 
 const http = require("http");
 const { Server } = require("socket.io");
-
 const fs = require("fs");
 
 // ====================
-// 🟢 SUPABASE (SAFE LOAD)
+// 🟢 SUPABASE SAFE INIT
 // ====================
 let supabase = null;
 
@@ -20,9 +19,9 @@ try {
     "YOUR_SUPABASE_KEY"
   );
 
-  console.log("🟢 Supabase connected");
+  console.log("🟢 Supabase enabled");
 } catch (e) {
-  console.log("⚠️ Supabase NOT active (fallback mode)");
+  console.log("⚠️ Supabase not installed → fallback mode");
 }
 
 // ====================
@@ -65,8 +64,6 @@ const serversList = [
 ];
 
 // ====================
-// 💾 MEMORY CACHE
-// ====================
 let cache = {};
 let rankedServers = {};
 
@@ -87,7 +84,7 @@ async function queryServer(host, port) {
 }
 
 // ====================
-// 💾 SAVE TO DB
+// 💾 SAFE DB INSERT (NON-BLOCKING)
 // ====================
 async function saveToDB(serverId, players) {
   if (!supabase) return;
@@ -100,35 +97,42 @@ async function saveToDB(serverId, players) {
         timestamp: Date.now()
       }
     ]);
-  } catch {}
+  } catch (e) {
+    // არ ვაგდებთ ranking-ს DB error-ზე
+  }
 }
 
 // ====================
-// 📥 GET HISTORY (SAFE + FIX)
+// 📥 SAFE HISTORY FETCH
 // ====================
 async function getHistory(serverId) {
   if (!supabase) return [];
 
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
 
-  const { data } = await supabase
-    .from("server_stats")
-    .select("*")
-    .eq("server_id", serverId)
-    .gte("timestamp", cutoff);
+  try {
+    const { data } = await supabase
+      .from("server_stats")
+      .select("players,timestamp")
+      .eq("server_id", serverId)
+      .gte("timestamp", cutoff);
 
-  return data || [];
+    return data || [];
+  } catch {
+    return [];
+  }
 }
 
 // ====================
-// 🧠 FIXED SCORE (IMPORTANT PART)
+// 🧠 FIXED SCORE (IMPORTANT FIX)
 // ====================
 function calculateScore(data) {
-  if (!data || data.length === 0) {
-    return 0.01; // 🔥 FIX: never 0 (prevents players-only ranking)
+  if (!data || data.length < 3) {
+    // 🔥 FIX: not allow players-only domination
+    return 0.5;
   }
 
-  const total = data.reduce((sum, d) => sum + d.players, 0);
+  const total = data.reduce((s, d) => s + d.players, 0);
   const avg = total / data.length;
 
   const peak = Math.max(...data.map(d => d.players));
@@ -136,14 +140,8 @@ function calculateScore(data) {
   const active = data.filter(d => d.players >= 5).length;
   const stability = active / data.length;
 
-  // 🔥 MORE BALANCED FORMULA (prevents pure "current players wins")
   return Number(
-    (
-      avg * 0.55 +
-      peak * 0.25 +
-      stability * 10 +
-      data.length * 0.02
-    ).toFixed(2)
+    (avg * 0.55 + peak * 0.25 + stability * 10 + data.length * 0.01).toFixed(2)
   );
 }
 
@@ -159,8 +157,8 @@ async function updateRanks() {
       const prev = cache[key];
       const playersNow = data?.players?.length ?? prev?.players ?? 0;
 
-      // 💾 SAVE HISTORY
-      await saveToDB(key, playersNow);
+      // 💾 DB WRITE (ASYNC SAFE)
+      saveToDB(key, playersNow);
 
       cache[key] = {
         ip: key,
@@ -178,9 +176,7 @@ async function updateRanks() {
     Object.values(cache).map(async (s) => {
       const history = await getHistory(s.ip);
 
-      const score = calculateScore(
-        history.map(h => ({ players: h.players }))
-      );
+      const score = calculateScore(history);
 
       return {
         ...s,
@@ -198,17 +194,13 @@ async function updateRanks() {
 }
 
 // ====================
-// 🚀 INIT
-// ====================
 (async () => {
   await updateRanks();
-  console.log("🚀 FIXED RANKING SYSTEM ONLINE");
+  console.log("🚀 24H RANKING FULLY STABLE NOW");
 })();
 
 setInterval(updateRanks, UPDATE_INTERVAL);
 
-// ====================
-// 📡 API
 // ====================
 app.get("/servers", (req, res) => {
   res.set("Cache-Control", "no-store");
@@ -216,7 +208,7 @@ app.get("/servers", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("FIXED CRASH SAFE CS SERVER SYSTEM 🚀");
+  res.send("STABLE 24H CS SERVER RANKING 🚀");
 });
 
 // ====================
