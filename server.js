@@ -101,6 +101,8 @@ async function saveToDB(serverId, players) {
 }
 
 // ====================
+// 📥 HISTORY
+// ====================
 async function getHistory(serverId) {
   if (!supabase) return [];
 
@@ -136,6 +138,8 @@ function calculateScore(data) {
 }
 
 // ====================
+// 🔥 LOAD ADMIN CONFIG
+// ====================
 async function loadAdminConfig() {
   if (!supabase) return;
 
@@ -146,11 +150,15 @@ async function loadAdminConfig() {
     (data || []).forEach(row => {
       adminConfig[row.server_id] = row;
     });
+
+    console.log("🔄 ADMIN CONFIG LOADED");
   } catch {
     console.log("⚠️ config load failed");
   }
 }
 
+// ====================
+// 📊 UPDATE SYSTEM (FIXED SYNC)
 // ====================
 async function updateRanks() {
   await Promise.all(
@@ -204,10 +212,15 @@ async function updateRanks() {
       ...s,
       rank: i + 1
     }));
+
+  // 🔥 FORCE SYNC SIGNAL
+  io.emit("servers_update", rankedServers);
+
+  console.log("📊 RANKS UPDATED + SYNCED");
 }
 
 // ====================
-// 🔐 SAVE API (FIXED)
+// 🔐 SAVE API (UNCHANGED LOGIC)
 // ====================
 app.post("/api/admin/save", async (req, res) => {
   const { changes, nickname } = req.body;
@@ -224,8 +237,7 @@ app.post("/api/admin/save", async (req, res) => {
     for (const change of changes) {
       const serverId = change.serverId;
 
-      // 🔥 FIXED UPSERT
-      const result = await supabase
+      await supabase
         .from("servers_config")
         .upsert(
           {
@@ -235,11 +247,9 @@ app.post("/api/admin/save", async (req, res) => {
           },
           { onConflict: "server_id" }
         );
-
-      // optional debug
-      console.log("UPSERT RESULT:", result);
     }
 
+    // 🔥 IMPORTANT FIX: reload + refresh immediately
     await loadAdminConfig();
     await updateRanks();
 
@@ -251,11 +261,19 @@ app.post("/api/admin/save", async (req, res) => {
 });
 
 // ====================
+// 🌐 API (NO CACHE FIX)
+// ====================
 app.get("/servers", (req, res) => {
-  res.set("Cache-Control", "no-store");
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0"
+  });
+
   res.json({ servers: rankedServers });
 });
 
+// ====================
 app.get("/", (req, res) => {
   res.send("STABLE 24H CS SERVER RANKING 🚀");
 });
