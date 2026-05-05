@@ -65,7 +65,7 @@ const serversList = [
 // ====================
 let cache = {};
 let rankedServers = {};
-let adminConfig = {}; // 🔥 NEW
+let adminConfig = {};
 
 // ====================
 // 🎮 GAMEDIG
@@ -101,8 +101,6 @@ async function saveToDB(serverId, players) {
 }
 
 // ====================
-// 📥 HISTORY
-// ====================
 async function getHistory(serverId) {
   if (!supabase) return [];
 
@@ -122,8 +120,6 @@ async function getHistory(serverId) {
 }
 
 // ====================
-// 🧠 SCORE
-// ====================
 function calculateScore(data) {
   if (!data || data.length < 3) return 0.5;
 
@@ -140,8 +136,6 @@ function calculateScore(data) {
 }
 
 // ====================
-// 🔥 LOAD ADMIN CONFIG
-// ====================
 async function loadAdminConfig() {
   if (!supabase) return;
 
@@ -157,8 +151,6 @@ async function loadAdminConfig() {
   }
 }
 
-// ====================
-// 📊 UPDATE SYSTEM
 // ====================
 async function updateRanks() {
   await Promise.all(
@@ -215,7 +207,7 @@ async function updateRanks() {
 }
 
 // ====================
-// 🔐 SAVE API
+// 🔐 SAVE API (FIXED)
 // ====================
 app.post("/api/admin/save", async (req, res) => {
   const { changes, nickname } = req.body;
@@ -232,26 +224,28 @@ app.post("/api/admin/save", async (req, res) => {
     for (const change of changes) {
       const serverId = change.serverId;
 
-      if (change.type === "boost") {
-        await supabase.from("servers_config").upsert({
-          server_id: serverId,
-          boost: change.value
-        });
-      }
+      // 🔥 FIXED UPSERT
+      const result = await supabase
+        .from("servers_config")
+        .upsert(
+          {
+            server_id: serverId,
+            boost: change.type === "boost" ? change.value : undefined,
+            pinned: change.type === "pin" ? change.value : undefined
+          },
+          { onConflict: "server_id" }
+        );
 
-      if (change.type === "pin") {
-        await supabase.from("servers_config").upsert({
-          server_id: serverId,
-          pinned: change.value
-        });
-      }
+      // optional debug
+      console.log("UPSERT RESULT:", result);
     }
 
     await loadAdminConfig();
     await updateRanks();
 
     res.json({ success: true });
-  } catch {
+  } catch (e) {
+    console.log(e);
     res.status(500).json({ error: "Save failed" });
   }
 });
