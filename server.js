@@ -4,7 +4,6 @@ const Gamedig = require("gamedig");
 
 const http = require("http");
 const { Server } = require("socket.io");
-const fs = require("fs");
 
 // ====================
 // 🟢 SUPABASE SAFE INIT
@@ -66,6 +65,7 @@ const serversList = [
 // ====================
 let cache = {};
 let rankedServers = {};
+let adminConfig = {}; // 🔥 NEW
 
 // ====================
 // 🎮 GAMEDIG
@@ -84,7 +84,7 @@ async function queryServer(host, port) {
 }
 
 // ====================
-// 💾 SAFE DB INSERT (NON-BLOCKING)
+// 💾 SAFE DB INSERT
 // ====================
 async function saveToDB(serverId, players) {
   if (!supabase) return;
@@ -97,13 +97,11 @@ async function saveToDB(serverId, players) {
         timestamp: Date.now()
       }
     ]);
-  } catch (e) {
-    // არ ვაგდებთ ranking-ს DB error-ზე
-  }
+  } catch {}
 }
 
 // ====================
-// 📥 SAFE HISTORY FETCH
+// 📥 HISTORY
 // ====================
 async function getHistory(serverId) {
   if (!supabase) return [];
@@ -124,25 +122,39 @@ async function getHistory(serverId) {
 }
 
 // ====================
-// 🧠 FIXED SCORE (IMPORTANT FIX)
+// 🧠 SCORE
 // ====================
 function calculateScore(data) {
-  if (!data || data.length < 3) {
-    // 🔥 FIX: not allow players-only domination
-    return 0.5;
-  }
+  if (!data || data.length < 3) return 0.5;
 
   const total = data.reduce((s, d) => s + d.players, 0);
   const avg = total / data.length;
 
   const peak = Math.max(...data.map(d => d.players));
-
   const active = data.filter(d => d.players >= 5).length;
   const stability = active / data.length;
 
   return Number(
     (avg * 0.55 + peak * 0.25 + stability * 10 + data.length * 0.01).toFixed(2)
   );
+}
+
+// ====================
+// 🔥 LOAD ADMIN CONFIG
+// ====================
+async function loadAdminConfig() {
+  if (!supabase) return;
+
+  try {
+    const { data } = await supabase.from("servers_config").select("*");
+
+    adminConfig = {};
+    (data || []).forEach(row => {
+      adminConfig[row.server_id] = row;
+    });
+  } catch {
+    console.log("⚠️ config load failed");
+  }
 }
 
 // ====================
@@ -157,7 +169,6 @@ async function updateRanks() {
       const prev = cache[key];
       const playersNow = data?.players?.length ?? prev?.players ?? 0;
 
-      // 💾 DB WRITE (ASYNC SAFE)
       saveToDB(key, playersNow);
 
       cache[key] = {
@@ -175,18 +186,28 @@ async function updateRanks() {
   const enriched = await Promise.all(
     Object.values(cache).map(async (s) => {
       const history = await getHistory(s.ip);
-
       const score = calculateScore(history);
 
       return {
         ...s,
-        score
+        score,
+        boost: adminConfig[s.ip]?.boost || false,
+        pinned: adminConfig[s.ip]?.pinned || 0
       };
     })
   );
 
   rankedServers = enriched
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => {
+      if (a.pinned && b.pinned) return a.pinned - b.pinned;
+      if (a.pinned) return -1;
+      if (b.pinned) return 1;
+
+      const boostA = a.boost ? 1000 : 0;
+      const boostB = b.boost ? 1000 : 0;
+
+      return (b.score + boostB) - (a.score + boostA);
+    })
     .map((s, i) => ({
       ...s,
       rank: i + 1
@@ -194,12 +215,46 @@ async function updateRanks() {
 }
 
 // ====================
-(async () => {
-  await updateRanks();
-  console.log("🚀 24H RANKING FULLY STABLE NOW");
-})();
+// 🔐 SAVE API
+// ====================
+app.post("/api/admin/save", async (req, res) => {
+  const { changes, nickname } = req.body;
 
-setInterval(updateRanks, UPDATE_INTERVAL);
+  if (nickname !== "giusha$$") {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  if (!supabase) {
+    return res.json({ success: false });
+  }
+
+  try {
+    for (const change of changes) {
+      const serverId = change.serverId;
+
+      if (change.type === "boost") {
+        await supabase.from("servers_config").upsert({
+          server_id: serverId,
+          boost: change.value
+        });
+      }
+
+      if (change.type === "pin") {
+        await supabase.from("servers_config").upsert({
+          server_id: serverId,
+          pinned: change.value
+        });
+      }
+    }
+
+    await loadAdminConfig();
+    await updateRanks();
+
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: "Save failed" });
+  }
+});
 
 // ====================
 app.get("/servers", (req, res) => {
@@ -210,6 +265,15 @@ app.get("/servers", (req, res) => {
 app.get("/", (req, res) => {
   res.send("STABLE 24H CS SERVER RANKING 🚀");
 });
+
+// ====================
+(async () => {
+  await loadAdminConfig();
+  await updateRanks();
+  console.log("🚀 SYSTEM READY WITH ADMIN CONTROL");
+})();
+
+setInterval(updateRanks, UPDATE_INTERVAL);
 
 // ====================
 server.listen(PORT, () => {
