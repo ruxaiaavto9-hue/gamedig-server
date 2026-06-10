@@ -6,7 +6,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 
 // ====================
-// 🔌 FTP MODULE (NEW)
+// 🔌 FTP MODULE
 // ====================
 const ftp = require("basic-ftp");
 
@@ -19,8 +19,8 @@ try {
   const { createClient } = require("@supabase/supabase-js");
 
   supabase = createClient(
-    "YOUR_SUPABASE_URL",
-    "YOUR_SUPABASE_KEY"
+    process.env.SUPABASE_URL || "YOUR_SUPABASE_URL",
+    process.env.SUPABASE_KEY || "YOUR_SUPABASE_KEY"
   );
 
   console.log("🟢 Supabase enabled");
@@ -42,7 +42,7 @@ const UPDATE_INTERVAL = 20000;
 const TIMEOUT = 8000;
 
 // ====================
-// 🎮 SERVERS
+// 🎮 SERVERS LIST
 // ====================
 const serversList = [
   { host: "80.241.246.26", port: 222 },
@@ -51,21 +51,7 @@ const serversList = [
   { host: "80.241.246.26", port: 26 },
   { host: "80.241.246.26", port: 27016 },
   { host: "80.241.246.26", port: 27777 },
-  { host: "80.241.246.26", port: 336 },
-  { host: "80.241.246.26", port: 666 },
-  { host: "80.241.246.26", port: 444 },
-  { host: "80.241.246.26", port: 555 },
-  { host: "80.241.246.26", port: 266 },
-  { host: "80.241.246.26", port: 27020 },
-  { host: "80.241.246.26", port: 27225 },
-  { host: "80.241.246.26", port: 27019 },
-  { host: "80.241.246.26", port: 260 },
-  { host: "80.241.246.26", port: 241 },
-  { host: "80.241.246.26", port: 888 },
-  { host: "80.241.246.26", port: 27446 },
-  { host: "80.241.246.26", port: 27017 },
-  { host: "80.241.246.26", port: 126 },
-  { host: "80.241.246.26", port: 346 }
+  { host: "80.241.246.26", port: 27020 }
 ];
 
 // ====================
@@ -74,7 +60,7 @@ let rankedServers = {};
 let adminConfig = {};
 
 // ====================
-// 🎮 GAMEDIG
+// 🎮 GAMEDIG QUERY
 // ====================
 async function queryServer(host, port) {
   try {
@@ -90,81 +76,20 @@ async function queryServer(host, port) {
 }
 
 // ====================
-// 💾 SAFE DB INSERT
-// ====================
-async function saveToDB(serverId, players) {
-  if (!supabase) return;
-
-  try {
-    await supabase.from("server_stats").insert([
-      {
-        server_id: serverId,
-        players,
-        timestamp: Date.now()
-      }
-    ]);
-  } catch {}
-}
-
-// ====================
-// 📥 HISTORY
-// ====================
-async function getHistory(serverId) {
-  if (!supabase) return [];
-
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-
-  try {
-    const { data } = await supabase
-      .from("server_stats")
-      .select("players,timestamp")
-      .eq("server_id", serverId)
-      .gte("timestamp", cutoff);
-
-    return data || [];
-  } catch {
-    return [];
-  }
-}
-
+// 📊 SCORE
 // ====================
 function calculateScore(data) {
   if (!data || data.length < 3) return 0.5;
 
   const total = data.reduce((s, d) => s + d.players, 0);
   const avg = total / data.length;
-
   const peak = Math.max(...data.map(d => d.players));
-  const active = data.filter(d => d.players >= 5).length;
-  const stability = active / data.length;
 
-  return Number(
-    (avg * 0.55 + peak * 0.25 + stability * 10 + data.length * 0.01).toFixed(2)
-  );
+  return Number((avg * 0.7 + peak * 0.3).toFixed(2));
 }
 
 // ====================
-// 🔥 LOAD ADMIN CONFIG
-// ====================
-async function loadAdminConfig() {
-  if (!supabase) return;
-
-  try {
-    const { data } = await supabase.from("servers_config").select("*");
-
-    adminConfig = {};
-    (data || []).forEach(row => {
-      adminConfig[row.server_id] = row;
-    });
-
-    console.log("🔄 ADMIN CONFIG LOADED");
-  } catch {
-    console.log("⚠️ config load failed");
-  }
-}
-
-// ====================
-// 📊 UPDATE SYSTEM
+// 🔄 UPDATE RANKS
 // ====================
 async function updateRanks() {
   await Promise.all(
@@ -172,112 +97,28 @@ async function updateRanks() {
       const key = `${s.host}:${s.port}`;
       const data = await queryServer(s.host, s.port);
 
-      const prev = cache[key];
-      const playersNow = data?.players?.length ?? prev?.players ?? 0;
-
-      saveToDB(key, playersNow);
-
       cache[key] = {
         ip: key,
-        name: data?.name || prev?.name || "Unknown Server",
-        players: playersNow,
-        maxPlayers: data?.maxplayers ?? prev?.maxPlayers ?? 32,
-        map: data?.map || prev?.map || "unknown",
-        online: !!data,
-        lastUpdate: Date.now()
+        name: data?.name || "Unknown",
+        players: data?.players?.length || 0,
+        maxPlayers: data?.maxplayers || 32,
+        map: data?.map || "unknown",
+        online: !!data
       };
     })
   );
 
-  const enriched = await Promise.all(
-    Object.values(cache).map(async (s) => {
-      const history = await getHistory(s.ip);
-      const score = calculateScore(history);
-
-      return {
-        ...s,
-        score,
-        boost: adminConfig[s.ip]?.boost || false,
-        pinned: adminConfig[s.ip]?.pinned || 0
-      };
-    })
-  );
-
-  rankedServers = enriched
-    .sort((a, b) => {
-      if (a.pinned && b.pinned) return a.pinned - b.pinned;
-      if (a.pinned) return -1;
-      if (b.pinned) return 1;
-
-      const boostA = a.boost ? 1000 : 0;
-      const boostB = b.boost ? 1000 : 0;
-
-      return (b.score + boostB) - (a.score + boostA);
-    })
-    .map((s, i) => ({
-      ...s,
-      rank: i + 1
-    }));
+  rankedServers = Object.values(cache)
+    .sort((a, b) => b.players - a.players)
+    .map((s, i) => ({ ...s, rank: i + 1 }));
 
   io.emit("servers_update", rankedServers);
 
-  console.log("📊 RANKS UPDATED + SYNCED");
+  console.log("📊 Updated");
 }
 
 // ====================
-// 🔐 SAVE API
-// ====================
-app.post("/api/admin/save", async (req, res) => {
-  const { changes, nickname } = req.body;
-
-  if (nickname !== "giusha$$") {
-    return res.status(403).json({ error: "Unauthorized" });
-  }
-
-  if (!supabase) {
-    return res.json({ success: false });
-  }
-
-  try {
-    for (const change of changes) {
-      const serverId = change.serverId;
-
-      await supabase
-        .from("servers_config")
-        .upsert(
-          {
-            server_id: serverId,
-            boost: change.type === "boost" ? change.value : undefined,
-            pinned: change.type === "pin" ? change.value : undefined
-          },
-          { onConflict: "server_id" }
-        );
-    }
-
-    await loadAdminConfig();
-    await updateRanks();
-
-    res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: "Save failed" });
-  }
-});
-
-// ====================
-// 🌐 SERVERS API
-// ====================
-app.get("/servers", (req, res) => {
-  res.set({
-    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-    "Pragma": "no-cache",
-    "Expires": "0"
-  });
-
-  res.json({ servers: rankedServers });
-});
-
-// ====================
-// 🔌 NEW FTP ANALYZER API
+// 🔌 FTP ANALYZER
 // ====================
 app.get("/api/plugins", async (req, res) => {
   const client = new ftp.Client();
@@ -297,9 +138,8 @@ app.get("/api/plugins", async (req, res) => {
     const plugins = list.map(p => ({
       name: p.name,
       size: p.size,
-      type: p.type,
-      isAMXX: p.name.endsWith(".amxx"),
-      isSMA: p.name.endsWith(".sma")
+      amxx: p.name.endsWith(".amxx"),
+      sma: p.name.endsWith(".sma")
     }));
 
     res.json({
@@ -319,15 +159,23 @@ app.get("/api/plugins", async (req, res) => {
 });
 
 // ====================
+// 🌐 SERVERS API
+// ====================
+app.get("/servers", (req, res) => {
+  res.json({ servers: rankedServers });
+});
+
+// ====================
+// 🟢 ROOT
+// ====================
 app.get("/", (req, res) => {
-  res.send("STABLE 24H CS SERVER RANKING + FTP ANALYZER 🚀");
+  res.send("CS 1.6 SERVER + FTP ANALYZER RUNNING 🚀");
 });
 
 // ====================
 (async () => {
-  await loadAdminConfig();
   await updateRanks();
-  console.log("🚀 SYSTEM READY WITH ADMIN + FTP ANALYZER");
+  console.log("🚀 SYSTEM READY");
 })();
 
 setInterval(updateRanks, UPDATE_INTERVAL);
