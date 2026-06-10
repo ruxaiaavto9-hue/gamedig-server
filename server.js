@@ -6,6 +6,11 @@ const http = require("http");
 const { Server } = require("socket.io");
 
 // ====================
+// 🔌 FTP MODULE (NEW)
+// ====================
+const ftp = require("basic-ftp");
+
+// ====================
 // 🟢 SUPABASE SAFE INIT
 // ====================
 let supabase = null;
@@ -159,7 +164,7 @@ async function loadAdminConfig() {
 }
 
 // ====================
-// 📊 UPDATE SYSTEM (FIXED SYNC)
+// 📊 UPDATE SYSTEM
 // ====================
 async function updateRanks() {
   await Promise.all(
@@ -214,14 +219,13 @@ async function updateRanks() {
       rank: i + 1
     }));
 
-  // 🔥 FORCE SYNC SIGNAL
   io.emit("servers_update", rankedServers);
 
   console.log("📊 RANKS UPDATED + SYNCED");
 }
 
 // ====================
-// 🔐 SAVE API (UNCHANGED LOGIC)
+// 🔐 SAVE API
 // ====================
 app.post("/api/admin/save", async (req, res) => {
   const { changes, nickname } = req.body;
@@ -250,19 +254,17 @@ app.post("/api/admin/save", async (req, res) => {
         );
     }
 
-    // 🔥 IMPORTANT FIX: reload + refresh immediately
     await loadAdminConfig();
     await updateRanks();
 
     res.json({ success: true });
   } catch (e) {
-    console.log(e);
     res.status(500).json({ error: "Save failed" });
   }
 });
 
 // ====================
-// 🌐 API (NO CACHE FIX)
+// 🌐 SERVERS API
 // ====================
 app.get("/servers", (req, res) => {
   res.set({
@@ -275,15 +277,57 @@ app.get("/servers", (req, res) => {
 });
 
 // ====================
+// 🔌 NEW FTP ANALYZER API
+// ====================
+app.get("/api/plugins", async (req, res) => {
+  const client = new ftp.Client();
+  client.timeout = 10000;
+
+  try {
+    await client.access({
+      host: process.env.FTP_HOST,
+      user: process.env.FTP_USER,
+      password: process.env.FTP_PASS,
+      port: process.env.FTP_PORT || 21,
+      secure: false
+    });
+
+    const list = await client.list("/addons/amxmodx/plugins");
+
+    const plugins = list.map(p => ({
+      name: p.name,
+      size: p.size,
+      type: p.type,
+      isAMXX: p.name.endsWith(".amxx"),
+      isSMA: p.name.endsWith(".sma")
+    }));
+
+    res.json({
+      success: true,
+      count: plugins.length,
+      plugins
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  } finally {
+    client.close();
+  }
+});
+
+// ====================
 app.get("/", (req, res) => {
-  res.send("STABLE 24H CS SERVER RANKING 🚀");
+  res.send("STABLE 24H CS SERVER RANKING + FTP ANALYZER 🚀");
 });
 
 // ====================
 (async () => {
   await loadAdminConfig();
   await updateRanks();
-  console.log("🚀 SYSTEM READY WITH ADMIN CONTROL");
+  console.log("🚀 SYSTEM READY WITH ADMIN + FTP ANALYZER");
 })();
 
 setInterval(updateRanks, UPDATE_INTERVAL);
