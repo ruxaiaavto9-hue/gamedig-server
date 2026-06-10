@@ -108,61 +108,76 @@ async function updateRanks() {
   console.log("📊 Ranking updated");
 }
 
-// =======================================================
-// 🔥 NEW: AMX FULL ANALYZER ENGINE (SAFE ADDITION)
-// =======================================================
+// ====================
+// 🧠 FULL AMX ANALYZER ENGINE (NEW)
+// ====================
+function analyzeFullAMX(plugins = [], logs = [], errors = []) {
 
-function analyzeAMX(plugins = [], logs = [], errors = []) {
+  let issues = [];
+  let fixes = [];
+  let score = 100;
 
-  let report = {
-    pluginCount: plugins.length,
-    errorCount: errors.length,
-    warnings: [],
-    score: 100
-  };
-
-  // ❗ too many plugins
-  if (plugins.length > 40) {
-    report.warnings.push("Too many plugins may cause lag");
-    report.score -= 10;
+  // 🔌 PLUGINS
+  if (plugins.length > 35) {
+    issues.push("High plugin count may cause server lag");
+    fixes.push("Remove unused plugins");
+    score -= 15;
   }
 
-  // ❗ missing core plugins
-  const pluginNames = plugins.map(p => p.name || "");
+  const names = plugins.map(p => p.name || "");
 
-  if (!pluginNames.some(p => p.includes("admin"))) {
-    report.warnings.push("Admin plugin missing or broken");
-    report.score -= 20;
+  if (!names.some(n => n.includes("admin"))) {
+    issues.push("Admin plugin missing or broken");
+    fixes.push("Reinstall admin.amxx");
+    score -= 20;
   }
 
-  // ❗ error spikes
+  if (names.filter(n => n.includes("debug")).length > 2) {
+    issues.push("Debug plugins detected");
+    fixes.push("Disable debug plugins");
+    score -= 10;
+  }
+
+  // ❌ ERRORS
   if (errors.length > 0) {
-    report.warnings.push("AMX errors detected in logs");
-    report.score -= errors.length * 5;
+    issues.push(`AMX errors detected: ${errors.length}`);
+    fixes.push("Check AMX error logs");
+    score -= errors.length * 5;
   }
 
-  // ❗ suspicious logs
-  const lagPatterns = logs.filter(l =>
+  // 📉 LOG LAG DETECTION
+  const lagSignals = logs.filter(l =>
     l.includes("warning") ||
     l.includes("error") ||
+    l.includes("overflow") ||
     l.includes("cpu") ||
-    l.includes("overflow")
+    l.includes("timeout") ||
+    l.includes("assert")
   );
 
-  if (lagPatterns.length > 0) {
-    report.warnings.push("Possible performance issues detected");
-    report.score -= 15;
+  if (lagSignals.length > 10) {
+    issues.push("Log spam causing instability");
+    fixes.push("Reduce logging / disable heavy plugins");
+    score -= 20;
   }
 
-  if (report.score < 0) report.score = 0;
+  if (score < 0) score = 0;
 
-  return report;
+  return {
+    healthScore: score,
+    status:
+      score > 80 ? "Stable" :
+      score > 50 ? "Unstable" :
+      "Critical",
+    issues,
+    fixes
+  };
 }
 
 // ====================
-// 🔥 NEW API: FULL AMX SCAN
+// 🔥 FULL AMX ANALYZER API (NEW)
 // ====================
-app.get("/api/amx-scan", async (req, res) => {
+app.get("/api/amx-full-analyze", async (req, res) => {
 
   if (!ftp) {
     return res.json({
@@ -185,11 +200,7 @@ app.get("/api/amx-scan", async (req, res) => {
 
     // 📁 PLUGINS
     const pluginsRaw = await client.list("/addons/amxmodx/plugins");
-
-    const plugins = pluginsRaw.map(p => ({
-      name: p.name,
-      type: p.name.split(".").pop()
-    }));
+    const plugins = pluginsRaw.map(p => ({ name: p.name }));
 
     // 📁 LOGS
     let logs = [];
@@ -198,27 +209,28 @@ app.get("/api/amx-scan", async (req, res) => {
       logs = logFiles.map(l => l.name);
     } catch {}
 
-    // ❌ ERROR LOGS
+    // ❌ ERRORS
     let errors = [];
     try {
       const errFiles = await client.list("/addons/amxmodx/logs");
       errors = errFiles.map(e => e.name);
     } catch {}
 
-    // 🧠 ANALYZE
-    const analysis = analyzeAMX(plugins, logs, errors);
+    // 🧠 ANALYSIS
+    const analysis = analyzeFullAMX(plugins, logs, errors);
 
     res.json({
       success: true,
-      pluginsCount: plugins.length,
-      logsCount: logs.length,
-      errorsCount: errors.length,
-      plugins,
+      scanned: {
+        plugins: plugins.length,
+        logs: logs.length,
+        errors: errors.length
+      },
       analysis
     });
 
   } catch (err) {
-    res.status(500).json({
+    res.json({
       success: false,
       error: err.message
     });
