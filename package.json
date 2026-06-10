@@ -1,14 +1,21 @@
 {
-  "name": "gamedig-server",
+  "name": "cs16-ranking-ftp-system",
   "version": "1.0.0",
+  "description": "CS 1.6 Server Ranking + FTP Analyzer Backend",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "npm install"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "express": "^4.19.2",
     "cors": "^2.8.5",
-    "gamedig": "^4.0.0",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.7.5",
+    "gamedig": "^4.1.0",
+    "basic-ftp": "^5.0.5",
+    "@supabase/supabase-js": "^2.45.0"
   }
 }
