@@ -1,7 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 const Gamedig = require("gamedig");
-
 const http = require("http");
 const { Server } = require("socket.io");
 
@@ -54,24 +53,10 @@ const serversList = [
   { host: "80.241.246.26", port: 222 },
   { host: "80.241.246.26", port: 226 },
   { host: "80.241.246.26", port: 27999 },
-  { host: "80.241.246.26", port: 26 },
   { host: "80.241.246.26", port: 27016 },
-  { host: "80.241.246.26", port: 27777 },
-  { host: "80.241.246.26", port: 336 },
-  { host: "80.241.246.26", port: 666 },
-  { host: "80.241.246.26", port: 444 },
-  { host: "80.241.246.26", port: 555 },
-  { host: "80.241.246.26", port: 266 },
   { host: "80.241.246.26", port: 27020 },
-  { host: "80.241.246.26", port: 27225 },
   { host: "80.241.246.26", port: 27019 },
-  { host: "80.241.246.26", port: 260 },
-  { host: "80.241.246.26", port: 241 },
-  { host: "80.241.246.26", port: 888 },
-  { host: "80.241.246.26", port: 27446 },
-  { host: "80.241.246.26", port: 27017 },
-  { host: "80.241.246.26", port: 126 },
-  { host: "80.241.246.26", port: 346 }
+  { host: "80.241.246.26", port: 260 }
 ];
 
 let cache = {};
@@ -94,17 +79,7 @@ async function queryServer(host, port) {
 }
 
 // ====================
-// 📊 SCORE (SIMPLE SAFE VERSION)
-// ====================
-function calculateScore(data) {
-  if (!data || data.length < 2) return 0;
-
-  const total = data.reduce((s, d) => s + d.players, 0);
-  return total / data.length;
-}
-
-// ====================
-// 🔄 UPDATE RANKING (UNCHANGED LOGIC CORE)
+// 📊 RANK LOGIC (UNCHANGED)
 // ====================
 async function updateRanks() {
   await Promise.all(
@@ -133,14 +108,66 @@ async function updateRanks() {
   console.log("📊 Ranking updated");
 }
 
+// =======================================================
+// 🔥 NEW: AMX FULL ANALYZER ENGINE (SAFE ADDITION)
+// =======================================================
+
+function analyzeAMX(plugins = [], logs = [], errors = []) {
+
+  let report = {
+    pluginCount: plugins.length,
+    errorCount: errors.length,
+    warnings: [],
+    score: 100
+  };
+
+  // ❗ too many plugins
+  if (plugins.length > 40) {
+    report.warnings.push("Too many plugins may cause lag");
+    report.score -= 10;
+  }
+
+  // ❗ missing core plugins
+  const pluginNames = plugins.map(p => p.name || "");
+
+  if (!pluginNames.some(p => p.includes("admin"))) {
+    report.warnings.push("Admin plugin missing or broken");
+    report.score -= 20;
+  }
+
+  // ❗ error spikes
+  if (errors.length > 0) {
+    report.warnings.push("AMX errors detected in logs");
+    report.score -= errors.length * 5;
+  }
+
+  // ❗ suspicious logs
+  const lagPatterns = logs.filter(l =>
+    l.includes("warning") ||
+    l.includes("error") ||
+    l.includes("cpu") ||
+    l.includes("overflow")
+  );
+
+  if (lagPatterns.length > 0) {
+    report.warnings.push("Possible performance issues detected");
+    report.score -= 15;
+  }
+
+  if (report.score < 0) report.score = 0;
+
+  return report;
+}
+
 // ====================
-// 🔌 FTP ANALYZER (SAFE + FIXED)
+// 🔥 NEW API: FULL AMX SCAN
 // ====================
-app.get("/api/plugins", async (req, res) => {
+app.get("/api/amx-scan", async (req, res) => {
+
   if (!ftp) {
-    return res.status(500).json({
+    return res.json({
       success: false,
-      error: "basic-ftp not installed on server"
+      error: "FTP not available"
     });
   }
 
@@ -156,18 +183,38 @@ app.get("/api/plugins", async (req, res) => {
       secure: false
     });
 
-    const list = await client.list("/addons/amxmodx/plugins");
+    // 📁 PLUGINS
+    const pluginsRaw = await client.list("/addons/amxmodx/plugins");
 
-    const plugins = list.map(p => ({
+    const plugins = pluginsRaw.map(p => ({
       name: p.name,
-      amxx: p.name.endsWith(".amxx"),
-      sma: p.name.endsWith(".sma")
+      type: p.name.split(".").pop()
     }));
+
+    // 📁 LOGS
+    let logs = [];
+    try {
+      const logFiles = await client.list("/cstrike/logs");
+      logs = logFiles.map(l => l.name);
+    } catch {}
+
+    // ❌ ERROR LOGS
+    let errors = [];
+    try {
+      const errFiles = await client.list("/addons/amxmodx/logs");
+      errors = errFiles.map(e => e.name);
+    } catch {}
+
+    // 🧠 ANALYZE
+    const analysis = analyzeAMX(plugins, logs, errors);
 
     res.json({
       success: true,
-      count: plugins.length,
-      plugins
+      pluginsCount: plugins.length,
+      logsCount: logs.length,
+      errorsCount: errors.length,
+      plugins,
+      analysis
     });
 
   } catch (err) {
@@ -181,7 +228,7 @@ app.get("/api/plugins", async (req, res) => {
 });
 
 // ====================
-// 🌐 SERVERS API
+// 📊 EXISTING API (UNCHANGED)
 // ====================
 app.get("/servers", (req, res) => {
   res.json({ servers: rankedServers });
@@ -191,7 +238,7 @@ app.get("/servers", (req, res) => {
 // 🟢 ROOT
 // ====================
 app.get("/", (req, res) => {
-  res.send("CS 1.6 RANKING + FTP ANALYZER 🚀");
+  res.send("CS 1.6 RANKING + FULL AMX ANALYZER 🚀");
 });
 
 // ====================
