@@ -4,8 +4,7 @@
   "description": "CS 1.6 Server Ranking + FTP Analyzer Backend",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "build": "npm install"
+    "start": "node server.js"
   },
   "engines": {
     "node": ">=18"
