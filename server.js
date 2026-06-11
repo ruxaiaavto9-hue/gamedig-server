@@ -79,7 +79,7 @@ async function queryServer(host, port) {
 }
 
 // ====================
-// 📊 RANK LOGIC (UNCHANGED)
+// 📊 RANK LOGIC
 // ====================
 async function updateRanks() {
   await Promise.all(
@@ -104,78 +104,47 @@ async function updateRanks() {
     .map((s, i) => ({ ...s, rank: i + 1 }));
 
   io.emit("servers_update", rankedServers);
-
   console.log("📊 Ranking updated");
 }
 
 // ====================
-// 🧠 FULL AMX ANALYZER ENGINE (NEW)
+// 🧠 SAFE FTP SCANNER
 // ====================
-function analyzeFullAMX(plugins = [], logs = [], errors = []) {
+async function safeList(client, path) {
+  try {
+    return await client.list(path);
+  } catch {
+    return [];
+  }
+}
 
-  let issues = [];
-  let fixes = [];
+// ====================
+// 🧠 HEALTH FORMULA ENGINE
+// ====================
+function calculateHealth(scan) {
+
   let score = 100;
 
-  // 🔌 PLUGINS
-  if (plugins.length > 35) {
-    issues.push("High plugin count may cause server lag");
-    fixes.push("Remove unused plugins");
-    score -= 15;
-  }
-
-  const names = plugins.map(p => p.name || "");
-
-  if (!names.some(n => n.includes("admin"))) {
-    issues.push("Admin plugin missing or broken");
-    fixes.push("Reinstall admin.amxx");
-    score -= 20;
-  }
-
-  if (names.filter(n => n.includes("debug")).length > 2) {
-    issues.push("Debug plugins detected");
-    fixes.push("Disable debug plugins");
-    score -= 10;
-  }
-
-  // ❌ ERRORS
-  if (errors.length > 0) {
-    issues.push(`AMX errors detected: ${errors.length}`);
-    fixes.push("Check AMX error logs");
-    score -= errors.length * 5;
-  }
-
-  // 📉 LOG LAG DETECTION
-  const lagSignals = logs.filter(l =>
-    l.includes("warning") ||
-    l.includes("error") ||
-    l.includes("overflow") ||
-    l.includes("cpu") ||
-    l.includes("timeout") ||
-    l.includes("assert")
-  );
-
-  if (lagSignals.length > 10) {
-    issues.push("Log spam causing instability");
-    fixes.push("Reduce logging / disable heavy plugins");
-    score -= 20;
-  }
+  score -= Math.min(scan.errors * 3, 30);
+  score -= scan.plugins > 45 ? 10 : 0;
+  score -= scan.modules < 4 ? 15 : 0;
+  score -= scan.configs === 0 ? 20 : 0;
+  score -= scan.logs > 1000 ? 10 : 0;
+  score -= scan.maps < 5 ? 5 : 0;
 
   if (score < 0) score = 0;
 
   return {
-    healthScore: score,
+    score,
     status:
       score > 80 ? "Stable" :
       score > 50 ? "Unstable" :
-      "Critical",
-    issues,
-    fixes
+      "Critical"
   };
 }
 
 // ====================
-// 🔥 FULL AMX ANALYZER API (NEW)
+// 🔥 FULL AMX ANALYZER (PRO)
 // ====================
 app.get("/api/amx-full-analyze", async (req, res) => {
 
@@ -187,7 +156,7 @@ app.get("/api/amx-full-analyze", async (req, res) => {
   }
 
   const client = new ftp.Client();
-  client.timeout = 10000;
+  client.timeout = 15000;
 
   try {
     await client.access({
@@ -198,49 +167,85 @@ app.get("/api/amx-full-analyze", async (req, res) => {
       secure: false
     });
 
-    // 📁 PLUGINS
-    const pluginsRaw = await client.list("/addons/amxmodx/plugins");
-    const plugins = pluginsRaw.map(p => ({ name: p.name }));
+    // ====================
+    // 📁 FULL SCAN (ALL AMX SYSTEM)
+    // ====================
+    const plugins = await safeList(client, "/addons/amxmodx/plugins");
+    const configs = await safeList(client, "/addons/amxmodx/configs");
+    const modules = await safeList(client, "/addons/amxmodx/modules");
+    const logs = await safeList(client, "/addons/amxmodx/logs");
+    const data = await safeList(client, "/addons/amxmodx/data");
 
-    // 📁 LOGS
-    let logs = [];
-    try {
-      const logFiles = await client.list("/cstrike/logs");
-      logs = logFiles.map(l => l.name);
-    } catch {}
+    const metamod = await safeList(client, "/addons/metamod");
+    const maps = await safeList(client, "/cstrike/maps");
 
-    // ❌ ERRORS
-    let errors = [];
-    try {
-      const errFiles = await client.list("/addons/amxmodx/logs");
-      errors = errFiles.map(e => e.name);
-    } catch {}
+    // ====================
+    // ❌ ERROR FILTER
+    // ====================
+    const errorLogs = logs.filter(l =>
+      l.name?.toLowerCase().includes("error") ||
+      l.name?.toLowerCase().includes("warn") ||
+      l.name?.toLowerCase().includes("crash")
+    );
 
-    // 🧠 ANALYSIS
-    const analysis = analyzeFullAMX(plugins, logs, errors);
+    // ====================
+    // 🧠 CALCULATE HEALTH
+    // ====================
+    const health = calculateHealth({
+      plugins: plugins.length,
+      configs: configs.length,
+      modules: modules.length,
+      logs: logs.length,
+      maps: maps.length,
+      errors: errorLogs.length
+    });
 
-    res.json({
+    // ====================
+    // 📤 RESPONSE
+    // ====================
+    return res.json({
       success: true,
+
       scanned: {
         plugins: plugins.length,
+        configs: configs.length,
+        modules: modules.length,
         logs: logs.length,
-        errors: errors.length
+        data: data.length,
+        maps: maps.length,
+        metamod: metamod.length,
+        errors: errorLogs.length
       },
-      analysis
+
+      healthScore: health.score,
+      status: health.status,
+
+      issues: [
+        ...(plugins.length === 0 ? ["No plugins detected"] : []),
+        ...(configs.length === 0 ? ["No configs detected"] : []),
+        ...(modules.length < 4 ? ["Missing core modules"] : []),
+        ...(errorLogs.length > 0 ? ["AMX error logs detected"] : [])
+      ],
+
+      fixes: [
+        ...(errorLogs.length > 0 ? ["Check AMX logs"] : []),
+        ...(plugins.length === 0 ? ["Verify plugins directory"] : [])
+      ]
     });
 
   } catch (err) {
-    res.json({
+    return res.json({
       success: false,
       error: err.message
     });
+
   } finally {
     client.close();
   }
 });
 
 // ====================
-// 📊 EXISTING API (UNCHANGED)
+// 📊 SERVERS API (UNCHANGED)
 // ====================
 app.get("/servers", (req, res) => {
   res.json({ servers: rankedServers });
@@ -250,7 +255,7 @@ app.get("/servers", (req, res) => {
 // 🟢 ROOT
 // ====================
 app.get("/", (req, res) => {
-  res.send("CS 1.6 RANKING + FULL AMX ANALYZER 🚀");
+  res.send("CS 1.6 RANKING + PRO AMX FULL ANALYZER 🚀");
 });
 
 // ====================
